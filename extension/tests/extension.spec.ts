@@ -214,7 +214,7 @@ for (const [mode, startClientMethod] of [
       name: 'browser_navigate',
       arguments: { url: server.HELLO_WORLD },
     })).toHaveResponse({
-      result: expect.stringContaining('Extension connection timeout. Make sure the "Playwright MCP Bridge" extension is installed.'),
+      result: expect.stringContaining('Extension connection timeout. Make sure the "Blueprint MCP for Chrome" extension is installed.'),
       isError: true,
     });
 

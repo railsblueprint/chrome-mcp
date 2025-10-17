@@ -7,6 +7,64 @@ A Model Context Protocol (MCP) server that provides browser automation capabilit
 - **Fast and lightweight**. Uses Playwright's accessibility tree, not pixel-based input.
 - **LLM-friendly**. No vision models needed, operates purely on structured data.
 - **Deterministic tool application**. Avoids ambiguity common with screenshot-based approaches.
+- **Stealth Mode**. Optional Patchright integration for undetectable browser automation.
+
+### Stealth Mode
+
+This MCP server supports an optional **Stealth Mode** that uses [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) instead of standard Playwright. Patchright is a patched version of Playwright that bypasses bot detection mechanisms used by anti-bot systems like Cloudflare, Kasada, and others.
+
+**How it works:**
+1. Connect with the `stealth` parameter: `connect({ stealth: true })`
+2. The server creates a separate browser instance using Patchright
+3. Multiple clients can connect simultaneously with different modes
+4. Each mode (regular/stealth) reuses its own browser instance
+
+**Example usage:**
+```javascript
+// Regular mode (default - full debugging)
+await use_mcp_tool("playwright", "connect", {});
+
+// Stealth mode (bypasses bot detection)
+await use_mcp_tool("playwright", "connect", { stealth: true });
+```
+
+**Multi-client support:**
+- Client A connects with `{ stealth: false }` → Uses Playwright browser
+- Client B connects with `{ stealth: true }` → Uses Patchright browser
+- Both run simultaneously, sharing the Chrome extension but using different automation drivers
+
+**Trade-offs:**
+- **Regular Mode** (default): Full debugging capabilities including console logs and Runtime API access
+- **Stealth Mode**: Limited debugging (console API disabled) but undetectable by anti-bot systems
+
+**Note:** Stealth mode requires the `patchright` package to be installed (already included as a dependency).
+
+### Debug Mode
+
+For development and troubleshooting, the server supports a **Debug Mode** that can be enabled with the `--debug` flag:
+
+```bash
+# Direct usage
+node cli.js --extension --debug
+
+# With wrapper (recommended)
+node mcp-wrapper.js --extension --debug
+```
+
+**When debug mode is enabled:**
+- `mcp_reload_server` tool is available for restarting the MCP server
+- `browser_install` tool is available for installing browser binaries
+- Verbose logging is output to stderr for troubleshooting
+
+**When debug mode is disabled (default):**
+- Server reload and browser install tools are hidden
+- Logging is suppressed for cleaner output
+- Extension management tools (`browser_reload_extensions`, `browser_list_extensions`) remain visible as they're useful for debugging any browser extension
+
+Debug mode is useful when:
+- Developing or testing the MCP server itself
+- Troubleshooting MCP server issues
+- Installing new browser versions
 
 ### Requirements
 - Node.js 18 or newer
@@ -255,8 +313,10 @@ Playwright MCP server supports following arguments. They can be provided in the 
   --executable-path <path>              path to the browser executable.
   --extension                           Connect to a running browser instance
                                         (Edge/Chrome only). Requires the
-                                        "Playwright MCP Bridge" browser
+                                        "Blueprint MCP for Chrome" browser
                                         extension to be installed.
+  --debug                               Enable debug mode (shows reload/extension
+                                        tools and verbose logging)
   --grant-permissions <permissions...>  List of permissions to grant to the
                                         browser context, for example
                                         "geolocation", "clipboard-read",

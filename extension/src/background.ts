@@ -23,7 +23,7 @@ type PageMessage = {
   type: 'getTabs';
 } | {
   type: 'connectToTab';
-  tabId?: number;
+  tabId?: number;  // Optional: if not provided, lazy tab attachment mode
   windowId?: number;
   mcpRelayUrl: string;
 } | {
@@ -35,21 +35,69 @@ type PageMessage = {
 class TabShareExtension {
   private _activeConnection: RelayConnection | undefined;
   private _connectedTabId: number | null = null;
+  private _stealthMode: boolean | null = null; // null = N/A, true = On, false = Off
   private _pendingTabSelection = new Map<number, { connection: RelayConnection, timerId?: number }>();
+  private _autoConnecting: boolean = false;
+  private _autoConnectAttempts: number = 0;
+  private _maxAutoConnectAttempts: number = 3; // Stop auto-retrying after 3 failed attempts
+  private _logs: Array<{ timestamp: number; message: string }> = [];
+  private _maxLogs = 100;
 
   constructor() {
     chrome.tabs.onRemoved.addListener(this._onTabRemoved.bind(this));
     chrome.tabs.onUpdated.addListener(this._onTabUpdated.bind(this));
     chrome.tabs.onActivated.addListener(this._onTabActivated.bind(this));
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
-    chrome.action.onClicked.addListener(this._onActionClicked.bind(this));
+
+    // Initialize extension as enabled by default
+    chrome.storage.local.get(['extensionEnabled'], (result) => {
+      if (result.extensionEnabled === undefined) {
+        chrome.storage.local.set({ extensionEnabled: true });
+      }
+    });
+
+    // Auto-connect to MCP server on startup
+    this._autoConnect();
+  }
+
+  private async _autoConnect(): Promise<void> {
+    if (this._autoConnecting) {
+      debugLog('Auto-connect already in progress, skipping');
+      return;
+    }
+
+    this._autoConnecting = true;
+    const mcpRelayUrl = 'ws://127.0.0.1:5555/extension';
+    debugLog('Auto-connecting to MCP server at ' + mcpRelayUrl);
+    try {
+      await this._connectToRelay(0, mcpRelayUrl);
+      // Connect in lazy mode (no specific tab, tab will be selected on first command)
+      await this._connectTab(0, undefined, undefined, mcpRelayUrl);
+      debugLog('Auto-connection successful');
+      this._autoConnecting = false;
+    } catch (error: any) {
+      debugLog('Auto-connection failed: ' + error.message);
+      this._autoConnecting = false;
+      // Retry after 1 second
+      setTimeout(() => this._autoConnect(), 1000);
+    }
+  }
+
+  private async _isExtensionEnabled(): Promise<boolean> {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['extensionEnabled'], (result) => {
+        resolve(result.extensionEnabled !== false); // Default to true
+      });
+    });
   }
 
   // Promise-based message handling is not supported in Chrome: https://issues.chromium.org/issues/40753031
   private _onMessage(message: PageMessage, sender: chrome.runtime.MessageSender, sendResponse: (response: any) => void) {
     switch (message.type) {
       case 'connectToMCPRelay':
-        this._connectToRelay(sender.tab!.id!, message.mcpRelayUrl).then(
+        // Use tab ID if called from tab, or 0 if called from popup
+        const sourceId = sender.tab?.id ?? 0;
+        this._connectToRelay(sourceId, message.mcpRelayUrl).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true;
@@ -59,15 +107,18 @@ class TabShareExtension {
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true;
       case 'connectToTab':
-        const tabId = message.tabId || sender.tab?.id!;
-        const windowId = message.windowId || sender.tab?.windowId!;
+        // If no tabId specified, connect in lazy mode (tab will be created/selected on first command)
+        const tabId = message.tabId;
+        const windowId = message.windowId;
         this._connectTab(sender.tab!.id!, tabId, windowId, message.mcpRelayUrl!).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true; // Return true to indicate that the response will be sent asynchronously
       case 'getConnectionStatus':
         sendResponse({
-          connectedTabId: this._connectedTabId
+          connectedTabId: this._connectedTabId,
+          connected: this._activeConnection !== undefined,
+          stealthMode: this._stealthMode
         });
         return false;
       case 'disconnect':
@@ -81,12 +132,23 @@ class TabShareExtension {
 
   private async _connectToRelay(selectorTabId: number, mcpRelayUrl: string): Promise<void> {
     try {
+      const enabled = await this._isExtensionEnabled();
+      if (!enabled) {
+        throw new Error('Extension is disabled. Please enable it from the extension popup.');
+      }
+
       debugLog(`Connecting to relay at ${mcpRelayUrl}`);
+
       const socket = new WebSocket(mcpRelayUrl);
       await new Promise<void>((resolve, reject) => {
         socket.onopen = () => resolve();
         socket.onerror = () => reject(new Error('WebSocket error'));
-        setTimeout(() => reject(new Error('Connection timeout')), 5000);
+        socket.onclose = (event) => {
+          // Server rejected the connection (e.g., "Another extension connection already established")
+          reject(new Error(`WebSocket closed: ${event.reason || 'Unknown reason'}`));
+        };
+        // Reduced timeout from 5s to 2s for faster retries
+        setTimeout(() => reject(new Error('Connection timeout')), 2000);
       });
 
       const connection = new RelayConnection(socket);
@@ -94,6 +156,12 @@ class TabShareExtension {
         debugLog('Connection closed');
         this._pendingTabSelection.delete(selectorTabId);
         // TODO: show error in the selector tab?
+      };
+      connection.onStealthModeSet = (stealth: boolean) => {
+        debugLog('Stealth mode set:', stealth);
+        console.error('[Background] Stealth mode set to:', stealth); // Force visible log
+        this._stealthMode = stealth;
+        this._broadcastStatusChange();
       };
       this._pendingTabSelection.set(selectorTabId, { connection });
       debugLog(`Connected to MCP relay`);
@@ -104,9 +172,9 @@ class TabShareExtension {
     }
   }
 
-  private async _connectTab(selectorTabId: number, tabId: number, windowId: number, mcpRelayUrl: string): Promise<void> {
+  private async _connectTab(selectorTabId: number, tabId: number | undefined, windowId: number | undefined, mcpRelayUrl: string): Promise<void> {
     try {
-      debugLog(`Connecting tab ${tabId} to relay at ${mcpRelayUrl}`);
+      debugLog(`Connecting to relay at ${mcpRelayUrl} (lazy mode: ${!tabId})`);
       try {
         this._activeConnection?.close('Another connection is requested');
       } catch (error: any) {
@@ -119,22 +187,53 @@ class TabShareExtension {
         throw new Error('No active MCP relay connection');
       this._pendingTabSelection.delete(selectorTabId);
 
-      this._activeConnection.setTabId(tabId);
-      this._activeConnection.onclose = () => {
-        debugLog('MCP connection closed');
-        this._activeConnection = undefined;
-        void this._setConnectedTabId(null);
+      // Set up stealth mode callback for active connection
+      this._activeConnection.onStealthModeSet = (stealth: boolean) => {
+        debugLog('Stealth mode set on active connection:', stealth);
+        console.error('[Background] Stealth mode set on active connection to:', stealth); // Force visible log
+        this._stealthMode = stealth;
+        // Update badge to reflect stealth mode
+        if (this._connectedTabId) {
+          void this._updateBadgeForTab(this._connectedTabId);
+        }
+        this._broadcastStatusChange();
       };
 
-      await Promise.all([
-        this._setConnectedTabId(tabId),
-        chrome.tabs.update(tabId, { active: true }),
-        chrome.windows.update(windowId, { focused: true }),
-      ]);
-      debugLog(`Connected to MCP bridge`);
+      // Set up tab connection callback
+      this._activeConnection.onTabConnected = (tabId: number) => {
+        debugLog('Tab connected:', tabId);
+        void this._setConnectedTabId(tabId);
+        this._broadcastStatusChange();
+      };
+
+      // Lazy connection mode: resolve the tab promise without setting tabId
+      // The tab will be created when first command arrives
+      if (tabId) {
+        this._activeConnection.setTabId(tabId);
+        await Promise.all([
+          this._setConnectedTabId(tabId),
+          chrome.tabs.update(tabId, { active: true }),
+          chrome.windows.update(windowId!, { focused: true }),
+        ]);
+      } else {
+        // Lazy mode: signal that we're ready, tab will be created on first command
+        this._activeConnection.setTabId(undefined as any);
+      }
+
+      this._activeConnection.onclose = () => {
+        debugLog('MCP connection closed, will auto-reconnect...');
+        this._activeConnection = undefined;
+        this._stealthMode = null;
+        void this._setConnectedTabId(null);
+        this._broadcastStatusChange();
+        // Auto-reconnect after connection loss
+        setTimeout(() => this._autoConnect(), 1000);
+      };
+
+      debugLog(`Connected to MCP bridge (lazy mode: ${!tabId})`);
     } catch (error: any) {
       await this._setConnectedTabId(null);
-      debugLog(`Failed to connect tab ${tabId}:`, error.message);
+      debugLog(`Failed to connect:`, error.message);
       throw error;
     }
   }
@@ -145,7 +244,15 @@ class TabShareExtension {
     if (oldTabId && oldTabId !== tabId)
       await this._updateBadge(oldTabId, { text: '' });
     if (tabId)
-      await this._updateBadge(tabId, { text: '✓', color: '#4CAF50', title: 'Connected to MCP client' });
+      await this._updateBadgeForTab(tabId);
+  }
+
+  private async _updateBadgeForTab(tabId: number): Promise<void> {
+    // Use checkmark with different colors: blue for normal, black for stealth
+    const text = '✓';
+    const color = this._stealthMode ? '#000000' : '#1c75bc';
+    const title = this._stealthMode ? 'Connected (Stealth Mode)' : 'Connected to MCP client';
+    await this._updateBadge(tabId, { text, color, title });
   }
 
   private async _updateBadge(tabId: number, { text, color, title }: { text: string; color?: string, title?: string }): Promise<void> {
@@ -205,17 +312,24 @@ class TabShareExtension {
     return tabs.filter(tab => tab.url && !['chrome:', 'edge:', 'devtools:'].some(scheme => tab.url!.startsWith(scheme)));
   }
 
-  private async _onActionClicked(): Promise<void> {
-    await chrome.tabs.create({
-      url: chrome.runtime.getURL('status.html'),
-      active: true
-    });
-  }
-
   private async _disconnect(): Promise<void> {
     this._activeConnection?.close('User disconnected');
     this._activeConnection = undefined;
+    this._stealthMode = null; // Reset to N/A when disconnecting
     await this._setConnectedTabId(null);
+    this._broadcastStatusChange();
+  }
+
+  private _broadcastStatusChange(): void {
+    // Broadcast status change to all extension pages (popup, etc.)
+    chrome.runtime.sendMessage({
+      type: 'statusChanged',
+      connectedTabId: this._connectedTabId,
+      connected: this._activeConnection !== undefined,
+      stealthMode: this._stealthMode
+    }).catch(() => {
+      // Ignore errors if no listeners (popup might be closed)
+    });
   }
 }
 

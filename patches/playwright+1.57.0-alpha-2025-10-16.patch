@@ -1,0 +1,2384 @@
+diff --git a/node_modules/playwright/lib/mcp/browser/browserServerBackend.js b/node_modules/playwright/lib/mcp/browser/browserServerBackend.js
+index cf4e2f5..a661b7a 100644
+--- a/node_modules/playwright/lib/mcp/browser/browserServerBackend.js
++++ b/node_modules/playwright/lib/mcp/browser/browserServerBackend.js
+@@ -64,7 +64,16 @@ class BrowserServerBackend {
+       context.setRunningTool(void 0);
+     }
+     response.logEnd();
+-    return response.serialize();
++    try {
++      return response.serialize();
++    } catch (error) {
++      // If serialization fails due to navigation, return what we have
++      if (String(error).includes('Execution context was destroyed')) {
++        // Return the response without the problematic parts
++        return { content: response._result.length ? [{ type: "text", text: `### Result\n${response._result.join("\n")}` }] : [{ type: "text", text: "### Result\nOperation completed successfully" }], isError: response._isError };
++      }
++      throw error;
++    }
+   }
+   serverClosed() {
+     void this._context?.dispose().catch(import_log.logUnhandledError);
+diff --git a/node_modules/playwright/lib/mcp/browser/context.js b/node_modules/playwright/lib/mcp/browser/context.js
+index 7aeadab..eba1aeb 100644
+--- a/node_modules/playwright/lib/mcp/browser/context.js
++++ b/node_modules/playwright/lib/mcp/browser/context.js
+@@ -74,6 +74,8 @@ class Context {
+   async newTab() {
+     const { browserContext } = await this._ensureBrowserContext();
+     const page = await browserContext.newPage();
++    // Navigate to about:blank to avoid chrome:// URL attachment issues
++    await page.goto('about:blank').catch(() => {});
+     this._currentTab = this._tabs.find((t) => t.page === page);
+     return this._currentTab;
+   }
+@@ -223,6 +225,17 @@ class Context {
+       code: `process.env['${secretName}']`
+     };
+   }
++  getCdpRelayServer() {
++    if (this._browserContextFactory?.getCdpRelayServer) {
++      return this._browserContextFactory.getCdpRelayServer();
++    }
++    return null;
++  }
++  async ensureRelay() {
++    if (this._browserContextFactory?.ensureRelay) {
++      await this._browserContextFactory.ensureRelay(this._clientInfo, this._abortController.signal, this._runningToolName);
++    }
++  }
+ }
+ function originOrHostGlob(originOrHost) {
+   try {
+diff --git a/node_modules/playwright/lib/mcp/browser/response.js b/node_modules/playwright/lib/mcp/browser/response.js
+index 318b875..93d0de7 100644
+--- a/node_modules/playwright/lib/mcp/browser/response.js
++++ b/node_modules/playwright/lib/mcp/browser/response.js
+@@ -69,10 +69,32 @@ class Response {
+     this._includeTabs = true;
+   }
+   async finish() {
+-    if (this._includeSnapshot !== "none" && this._context.currentTab())
+-      this._tabSnapshot = await this._context.currentTabOrDie().captureSnapshot(this._includeSnapshot);
+-    for (const tab of this._context.tabs())
+-      await tab.updateTitle();
++    // Only capture snapshot if explicitly requested
++    if (this._includeSnapshot !== "none" && this._context.currentTab()) {
++      try {
++        this._tabSnapshot = await this._context.currentTabOrDie().captureSnapshot(this._includeSnapshot);
++      } catch (error) {
++        // Ignore navigation errors during snapshot - tab might have navigated
++        if (!String(error).includes('Execution context was destroyed')) {
++          throw error;
++        }
++      }
++    }
++
++    // Only update tab titles if we're showing tabs (Playwright mode)
++    // In extension mode, we don't use Playwright's tab management
++    if (this._includeTabs || this._includeSnapshot !== "none") {
++      for (const tab of this._context.tabs()) {
++        try {
++          await tab.updateTitle();
++        } catch (error) {
++          // Ignore navigation errors during title update - tab might have navigated
++          if (!String(error).includes('Execution context was destroyed')) {
++            throw error;
++          }
++        }
++      }
++    }
+   }
+   tabSnapshot() {
+     return this._tabSnapshot;
+diff --git a/node_modules/playwright/lib/mcp/browser/tab.js b/node_modules/playwright/lib/mcp/browser/tab.js
+index bc7f5f7..83a833a 100644
+--- a/node_modules/playwright/lib/mcp/browser/tab.js
++++ b/node_modules/playwright/lib/mcp/browser/tab.js
+@@ -44,7 +44,7 @@ class Tab extends import_events.EventEmitter {
+     this.context = context;
+     this.page = page;
+     this._onPageClose = onPageClose;
+-    page.on("console", (event) => this._handleConsoleMessage(messageToConsoleMessage(event)));
++    page.on("console", async (event) => this._handleConsoleMessage(await messageToConsoleMessage(event)));
+     page.on("pageerror", (error) => this._handleConsoleMessage(pageErrorToConsoleMessage(error)));
+     page.on("request", (request) => this._requests.add(request));
+     page.on("close", () => this._onClose());
+@@ -72,7 +72,7 @@ class Tab extends import_events.EventEmitter {
+     const result = [];
+     const messages = await page.consoleMessages().catch(() => []);
+     for (const message of messages)
+-      result.push(messageToConsoleMessage(message));
++      result.push(await messageToConsoleMessage(message));
+     const errors = await page.pageErrors().catch(() => []);
+     for (const error of errors)
+       result.push(pageErrorToConsoleMessage(error));
+@@ -99,6 +99,15 @@ class Tab extends import_events.EventEmitter {
+     return renderModalStates(this.context, this.modalStates());
+   }
+   _dialogShown(dialog) {
++    // Automatically dismiss beforeunload dialogs to prevent blocking automation
++    if (dialog.type() === 'beforeunload') {
++      dialog.accept().catch(() => {
++        // Ignore errors - dialog might already be dismissed
++      });
++      // Don't add to modal states - we're handling it automatically
++      return;
++    }
++
+     this.setModalState({
+       type: "dialog",
+       description: `"${dialog.type()}" dialog with message "${dialog.message()}"`,
+@@ -145,6 +154,26 @@ class Tab extends import_events.EventEmitter {
+   }
+   async navigate(url) {
+     this._clearCollectedArtifacts();
++
++    // Suppress beforeunload dialogs before navigation
++    try {
++      await this.page.evaluate(() => {
++        // Remove all beforeunload event listeners
++        window.onbeforeunload = null;
++        // Clear any event listeners attached via addEventListener
++        const events = window.getEventListeners ? window.getEventListeners(window) : {};
++        if (events.beforeunload) {
++          events.beforeunload.forEach(listener => {
++            window.removeEventListener('beforeunload', listener.listener, listener.useCapture);
++          });
++        }
++      }).catch(() => {
++        // Ignore errors if page is not available
++      });
++    } catch (e) {
++      // Ignore - page might not be ready
++    }
++
+     const downloadEvent = (0, import_utils2.callOnPageNoTrace)(this.page, (page) => page.waitForEvent("download").catch(import_log.logUnhandledError));
+     try {
+       await this.page.goto(url, { waitUntil: "domcontentloaded" });
+@@ -242,11 +271,38 @@ class Tab extends import_events.EventEmitter {
+     });
+   }
+ }
+-function messageToConsoleMessage(message) {
++async function messageToConsoleMessage(message) {
++  // Serialize console arguments to JSON for better debugging
++  const args = message.args();
++  let serializedText = message.text();
++
++  if (args.length > 0) {
++    try {
++      const parts = await Promise.all(args.map(async (arg) => {
++        try {
++          const value = await arg.jsonValue();
++          // For objects and arrays, stringify them nicely
++          if (value !== null && typeof value === 'object') {
++            return JSON.stringify(value, null, 2);
++          }
++          // For primitives, just convert to string
++          return String(value);
++        } catch (e) {
++          // Non-serializable (DOM nodes, functions, etc.) - use toString
++          return arg.toString();
++        }
++      }));
++      serializedText = parts.join(' ');
++    } catch (e) {
++      // If serialization fails, fall back to message.text()
++      serializedText = message.text();
++    }
++  }
++
+   return {
+     type: message.type(),
+-    text: message.text(),
+-    toString: () => `[${message.type().toUpperCase()}] ${message.text()} @ ${message.location().url}:${message.location().lineNumber}`
++    text: serializedText,
++    toString: () => `[${message.type().toUpperCase()}] ${serializedText} @ ${message.location().url}:${message.location().lineNumber}`
+   };
+ }
+ function pageErrorToConsoleMessage(errorOrValue) {
+diff --git a/node_modules/playwright/lib/mcp/browser/tools.js b/node_modules/playwright/lib/mcp/browser/tools.js
+index b8caade..7d1c70d 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools.js
++++ b/node_modules/playwright/lib/mcp/browser/tools.js
+@@ -36,10 +36,12 @@ var import_common = __toESM(require("./tools/common"));
+ var import_console = __toESM(require("./tools/console"));
+ var import_dialogs = __toESM(require("./tools/dialogs"));
+ var import_evaluate = __toESM(require("./tools/evaluate"));
++var import_extensions = __toESM(require("./tools/extensions"));
+ var import_files = __toESM(require("./tools/files"));
+ var import_form = __toESM(require("./tools/form"));
+ var import_install = __toESM(require("./tools/install"));
+ var import_keyboard = __toESM(require("./tools/keyboard"));
++var import_locate = __toESM(require("./tools/locate"));
+ var import_mouse = __toESM(require("./tools/mouse"));
+ var import_navigate = __toESM(require("./tools/navigate"));
+ var import_network = __toESM(require("./tools/network"));
+@@ -50,21 +52,25 @@ var import_tabs = __toESM(require("./tools/tabs"));
+ var import_tracing = __toESM(require("./tools/tracing"));
+ var import_wait = __toESM(require("./tools/wait"));
+ var import_verify = __toESM(require("./tools/verify"));
++var import_system = __toESM(require("./tools/system"));
+ const browserTools = [
+   ...import_common.default,
+   ...import_console.default,
+   ...import_dialogs.default,
+   ...import_evaluate.default,
++  ...import_extensions.default,
+   ...import_files.default,
+   ...import_form.default,
+   ...import_install.default,
+   ...import_keyboard.default,
++  ...import_locate.default,
+   ...import_navigate.default,
+   ...import_network.default,
+   ...import_mouse.default,
+   ...import_pdf.default,
+   ...import_screenshot.default,
+   ...import_snapshot.default,
++  ...import_system.default,
+   ...import_tabs.default,
+   ...import_tracing.default,
+   ...import_wait.default,
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/console.js b/node_modules/playwright/lib/mcp/browser/tools/console.js
+index 5885903..a150bee 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/console.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/console.js
+@@ -28,15 +28,67 @@ const console = (0, import_tool.defineTabTool)({
+   schema: {
+     name: "browser_console_messages",
+     title: "Get console messages",
+-    description: "Returns all console messages",
++    description: "Returns all console messages with optional filtering and context",
+     inputSchema: import_bundle.z.object({
+-      onlyErrors: import_bundle.z.boolean().optional().describe("Only return error messages")
++      onlyErrors: import_bundle.z.boolean().optional().describe("Only return error messages"),
++      filter: import_bundle.z.string().optional().describe("Regular expression to filter messages"),
++      limit: import_bundle.z.union([import_bundle.z.number(), import_bundle.z.string().transform(Number)]).optional().describe("Maximum number of matching messages to return"),
++      direction: import_bundle.z.enum(["first", "last"]).optional().describe("Return first or last matching messages (default: first)"),
++      before: import_bundle.z.union([import_bundle.z.number(), import_bundle.z.string().transform(Number)]).optional().describe("Number of lines to show before each match"),
++      after: import_bundle.z.union([import_bundle.z.number(), import_bundle.z.string().transform(Number)]).optional().describe("Number of lines to show after each match")
+     }),
+     type: "readOnly"
+   },
+   handle: async (tab, params, response) => {
+-    const messages = await tab.consoleMessages(params.onlyErrors ? "error" : void 0);
+-    messages.map((message) => response.addResult(message.toString()));
++    const allMessages = await tab.consoleMessages(params.onlyErrors ? "error" : void 0);
++    // Message objects already have JSON-serialized text from messageToConsoleMessage()
++    const messageStrings = allMessages.map((message) => message.toString());
++
++    let filteredMessages = messageStrings;
++    let matchIndices = [];
++
++    // Apply filter if provided
++    if (params.filter) {
++      const regex = new RegExp(params.filter);
++      matchIndices = messageStrings
++        .map((msg, idx) => regex.test(msg) ? idx : -1)
++        .filter(idx => idx !== -1);
++      filteredMessages = matchIndices.map(idx => messageStrings[idx]);
++    } else {
++      matchIndices = messageStrings.map((_, idx) => idx);
++    }
++
++    // Apply direction and limit
++    if (params.direction === "last") {
++      matchIndices = matchIndices.reverse();
++      filteredMessages = filteredMessages.reverse();
++    }
++
++    if (params.limit) {
++      matchIndices = matchIndices.slice(0, params.limit);
++      filteredMessages = filteredMessages.slice(0, params.limit);
++    }
++
++    // Add context lines (before/after)
++    if (params.before || params.after) {
++      const beforeCount = params.before || 0;
++      const afterCount = params.after || 0;
++      const resultSet = new Set();
++
++      matchIndices.forEach(matchIdx => {
++        const start = Math.max(0, matchIdx - beforeCount);
++        const end = Math.min(messageStrings.length - 1, matchIdx + afterCount);
++
++        for (let i = start; i <= end; i++) {
++          resultSet.add(i);
++        }
++      });
++
++      const sortedIndices = Array.from(resultSet).sort((a, b) => a - b);
++      filteredMessages = sortedIndices.map(idx => messageStrings[idx]);
++    }
++
++    filteredMessages.forEach((message) => response.addResult(message));
+   }
+ });
+ var console_default = [
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/dialogs.js b/node_modules/playwright/lib/mcp/browser/tools/dialogs.js
+index 3c2c183..6e19a76 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/dialogs.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/dialogs.js
+@@ -32,12 +32,15 @@ const handleDialog = (0, import_tool.defineTabTool)({
+     description: "Handle a dialog",
+     inputSchema: import_bundle.z.object({
+       accept: import_bundle.z.boolean().describe("Whether to accept the dialog."),
+-      promptText: import_bundle.z.string().optional().describe("The text of the prompt in case of a prompt dialog.")
++      promptText: import_bundle.z.string().optional().describe("The text of the prompt in case of a prompt dialog."),
++      includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
+     }),
+     type: "action"
+   },
+   handle: async (tab, params, response) => {
+-    response.setIncludeSnapshot();
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
+     const dialogState = tab.modalStates().find((state) => state.type === "dialog");
+     if (!dialogState)
+       throw new Error("No dialog visible");
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/evaluate.js b/node_modules/playwright/lib/mcp/browser/tools/evaluate.js
+index b28dcd8..cd65b1a 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/evaluate.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/evaluate.js
+@@ -37,7 +37,10 @@ var javascript = __toESM(require("../codegen"));
+ const evaluateSchema = import_bundle.z.object({
+   function: import_bundle.z.string().describe("() => { /* code */ } or (element) => { /* code */ } when element is provided"),
+   element: import_bundle.z.string().optional().describe("Human-readable element description used to obtain permission to interact with the element"),
+-  ref: import_bundle.z.string().optional().describe("Exact target element reference from the page snapshot")
++  ref: import_bundle.z.string().optional().describe("Exact target element reference from the page snapshot"),
++  selector: import_bundle.z.string().optional().describe("CSS selector (e.g., '#login-btn', '.submit-button')"),
++  xpath: import_bundle.z.string().optional().describe("XPath selector (e.g., '//button[@id=\"login\"]')"),
++  includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
+ });
+ const evaluate = (0, import_tool.defineTabTool)({
+   capability: "core",
+@@ -49,10 +52,56 @@ const evaluate = (0, import_tool.defineTabTool)({
+     type: "action"
+   },
+   handle: async (tab, params, response) => {
+-    response.setIncludeSnapshot();
++    // Only include snapshot if explicitly requested (default: false to save tokens)
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
+     let locator;
+-    if (params.ref && params.element) {
+-      locator = await tab.refLocator({ ref: params.ref, element: params.element });
++    const hasElementSelector = params.ref || params.selector || params.xpath;
++    if (hasElementSelector) {
++      // Helper to get locator from ref/selector/xpath with count validation
++      if (params.ref) {
++        locator = await tab.refLocator({ ref: params.ref, element: params.element });
++      } else {
++        let loc;
++        let selectorStr;
++        let selectorType;
++        if (params.xpath) {
++          loc = tab.page.locator(`xpath=${params.xpath}`);
++          selectorStr = `locator('xpath=${params.xpath}')`;
++          selectorType = 'xpath';
++        } else if (params.selector) {
++          loc = tab.page.locator(params.selector);
++          selectorStr = `locator('${params.selector}')`;
++          selectorType = 'css';
++        }
++
++        const count = await loc.count();
++        if (count === 0) {
++          const selectorValue = params.xpath || params.selector;
++          throw new Error(`No elements found matching ${selectorType} selector: ${selectorValue}`);
++        }
++        if (count > 1) {
++          if (params.index === undefined) {
++            const selectorValue = params.xpath || params.selector;
++            throw new Error(
++              `Found ${count} elements matching ${selectorType} selector: ${selectorValue}\n` +
++              `Please specify which element using the 'index' parameter (0=first, 1=second, -1=last)`
++            );
++          }
++          const actualIndex = params.index < 0 ? count + params.index : params.index;
++          if (actualIndex < 0 || actualIndex >= count) {
++            throw new Error(`Index ${params.index} out of range. Found ${count} elements, valid indices: 0 to ${count - 1}, or -1 to -${count}`);
++          }
++          loc = loc.nth(actualIndex);
++          selectorStr = `${selectorStr}.nth(${actualIndex})`;
++        }
++
++        if (params.element) {
++          loc = loc.describe(params.element);
++        }
++        locator = { locator: loc, resolved: selectorStr };
++      }
+       response.addCode(`await page.${locator.resolved}.evaluate(${javascript.quote(params.function)});`);
+     } else {
+       response.addCode(`await page.evaluate(${javascript.quote(params.function)});`);
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/extensions.js b/node_modules/playwright/lib/mcp/browser/tools/extensions.js
+new file mode 100644
+index 0000000..505c614
+--- /dev/null
++++ b/node_modules/playwright/lib/mcp/browser/tools/extensions.js
+@@ -0,0 +1,114 @@
++"use strict";
++var __defProp = Object.defineProperty;
++var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
++var __getOwnPropNames = Object.getOwnPropertyNames;
++var __hasOwnProp = Object.prototype.hasOwnProperty;
++var __export = (target, all) => {
++  for (var name in all)
++    __defProp(target, name, { get: all[name], enumerable: true });
++};
++var __copyProps = (to, from, except, desc) => {
++  if (from && typeof from === "object" || typeof from === "function") {
++    for (let key of __getOwnPropNames(from))
++      if (!__hasOwnProp.call(to, key) && key !== except)
++        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
++  }
++  return to;
++};
++var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
++var extensions_exports = {};
++__export(extensions_exports, {
++  default: () => extensions_default
++});
++module.exports = __toCommonJS(extensions_exports);
++var import_bundle = require("../../sdk/bundle");
++var import_tool = require("./tool");
++
++const listExtensions = (0, import_tool.defineTool)({
++  capability: "core",
++  schema: {
++    name: "browser_list_extensions",
++    title: "List Extensions",
++    description: "List all unpacked (development) Chrome extensions",
++    inputSchema: import_bundle.z.object({}),
++    type: "query"
++  },
++  handle: async (context, params, response) => {
++    try {
++      // Use REST API to list extensions (browser-level, no tab required)
++      const cdpRelayServer = context.getCdpRelayServer();
++      if (!cdpRelayServer) {
++        throw new Error("CDP relay server not available (not using extension bridge)");
++      }
++
++      const apiUrl = cdpRelayServer.apiEndpoint();
++      const fetchResponse = await fetch(apiUrl, {
++        method: 'GET',
++        headers: { 'Content-Type': 'application/json' }
++      });
++
++      if (!fetchResponse.ok) {
++        const error = await fetchResponse.json();
++        throw new Error(error.error || `HTTP ${fetchResponse.status}`);
++      }
++
++      const result = await fetchResponse.json();
++      const extensionsList = result.extensions.map(ext =>
++        `- ${ext.name} (v${ext.version}) [${ext.enabled ? 'enabled' : 'disabled'}]`
++      ).join('\n');
++      response.addResult(`Found ${result.count} unpacked extension(s):\n${extensionsList}`);
++    } catch (error) {
++      response.addResult(`Error listing extensions: ${error.message}`);
++    }
++  }
++});
++
++const reloadExtensions = (0, import_tool.defineTool)({
++  capability: "core",
++  schema: {
++    name: "browser_reload_extensions",
++    title: "Reload Extensions",
++    description: "Reload a specific unpacked Chrome extension by name. Use this tool to reload an extension being developed or debugged after making code changes, without manually reloading via chrome://extensions.",
++    inputSchema: import_bundle.z.object({
++      extensionName: import_bundle.z.string().describe("Name of extension to reload (required)")
++    }),
++    type: "action"
++  },
++  handle: async (context, params, response) => {
++    try {
++      // Use REST API to reload extensions (browser-level, no tab required)
++      const cdpRelayServer = context.getCdpRelayServer();
++      if (!cdpRelayServer) {
++        throw new Error("CDP relay server not available (not using extension bridge)");
++      }
++
++      const apiUrl = cdpRelayServer.apiEndpoint();
++      const fetchResponse = await fetch(apiUrl, {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ extensionName: params.extensionName })
++      });
++
++      if (!fetchResponse.ok) {
++        const error = await fetchResponse.json();
++        throw new Error(error.error || `HTTP ${fetchResponse.status}`);
++      }
++
++      const result = await fetchResponse.json();
++      if (result.reloadedCount === 0) {
++        response.addResult(params.extensionName
++          ? `Extension "${params.extensionName}" not found or not enabled`
++          : `No unpacked extensions found to reload`);
++      } else {
++        response.addResult(`Reloaded ${result.reloadedCount} unpacked extension(s): ${result.reloadedExtensions.join(", ")}`);
++      }
++    } catch (error) {
++      response.addResult(`Error reloading extensions: ${error.message}`);
++    }
++  }
++});
++
++var extensions_default = [
++  listExtensions,
++  reloadExtensions
++];
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/files.js b/node_modules/playwright/lib/mcp/browser/tools/files.js
+index 8e65cf1..626c64a 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/files.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/files.js
+@@ -31,12 +31,15 @@ const uploadFile = (0, import_tool.defineTabTool)({
+     title: "Upload files",
+     description: "Upload one or multiple files",
+     inputSchema: import_bundle.z.object({
+-      paths: import_bundle.z.array(import_bundle.z.string()).optional().describe("The absolute paths to the files to upload. Can be single file or multiple files. If omitted, file chooser is cancelled.")
++      paths: import_bundle.z.array(import_bundle.z.string()).optional().describe("The absolute paths to the files to upload. Can be single file or multiple files. If omitted, file chooser is cancelled."),
++      includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
+     }),
+     type: "action"
+   },
+   handle: async (tab, params, response) => {
+-    response.setIncludeSnapshot();
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
+     const modalState = tab.modalStates().find((state) => state.type === "fileChooser");
+     if (!modalState)
+       throw new Error("No file chooser visible");
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/form.js b/node_modules/playwright/lib/mcp/browser/tools/form.js
+index ee00f02..9365d58 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/form.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/form.js
+@@ -42,17 +42,69 @@ const fillForm = (0, import_tool.defineTabTool)({
+     description: "Fill multiple form fields",
+     inputSchema: import_bundle.z.object({
+       fields: import_bundle.z.array(import_bundle.z.object({
+-        name: import_bundle.z.string().describe("Human-readable field name"),
++        name: import_bundle.z.string().optional().describe("Human-readable field name"),
+         type: import_bundle.z.enum(["textbox", "checkbox", "radio", "combobox", "slider"]).describe("Type of the field"),
+-        ref: import_bundle.z.string().describe("Exact target field reference from the page snapshot"),
++        ref: import_bundle.z.string().optional().describe("Exact target field reference from the page snapshot"),
++        selector: import_bundle.z.string().optional().describe("CSS selector for the field"),
++        xpath: import_bundle.z.string().optional().describe("XPath selector for the field"),
+         value: import_bundle.z.string().describe("Value to fill in the field. If the field is a checkbox, the value should be `true` or `false`. If the field is a combobox, the value should be the text of the option.")
+-      })).describe("Fields to fill in")
++      }).refine(
++        (data) => (data.ref || data.selector || data.xpath),
++        { message: "At least one of: ref, selector, or xpath must be provided for each field" }
++      )).describe("Fields to fill in")
+     }),
+     type: "input"
+   },
+   handle: async (tab, params, response) => {
+     for (const field of params.fields) {
+-      const { locator, resolved } = await tab.refLocator({ element: field.name, ref: field.ref });
++      // Helper to get locator from ref/selector/xpath with count validation
++      let locator, resolved;
++      if (field.ref) {
++        const loc = await tab.refLocator({ element: field.name, ref: field.ref });
++        locator = loc.locator;
++        resolved = loc.resolved;
++      } else {
++        let selectorStr;
++        let selectorType;
++        if (field.xpath) {
++          locator = tab.page.locator(`xpath=${field.xpath}`);
++          selectorStr = `locator('xpath=${field.xpath}')`;
++          selectorType = 'xpath';
++        } else if (field.selector) {
++          locator = tab.page.locator(field.selector);
++          selectorStr = `locator('${field.selector}')`;
++          selectorType = 'css';
++        } else {
++          throw new Error("At least one of: ref, selector, or xpath must be provided for each field");
++        }
++
++        const count = await locator.count();
++        if (count === 0) {
++          const selectorValue = field.xpath || field.selector;
++          throw new Error(`Field "${field.name || 'unnamed'}": No elements found matching ${selectorType} selector: ${selectorValue}`);
++        }
++        if (count > 1) {
++          if (field.index === undefined) {
++            const selectorValue = field.xpath || field.selector;
++            throw new Error(
++              `Field "${field.name || 'unnamed'}": Found ${count} elements matching ${selectorType} selector: ${selectorValue}\n` +
++              `Please specify which element using the 'index' parameter (0=first, 1=second, -1=last)`
++            );
++          }
++          const actualIndex = field.index < 0 ? count + field.index : field.index;
++          if (actualIndex < 0 || actualIndex >= count) {
++            throw new Error(`Field "${field.name || 'unnamed'}": Index ${field.index} out of range. Found ${count} elements, valid indices: 0 to ${count - 1}, or -1 to -${count}`);
++          }
++          locator = locator.nth(actualIndex);
++          selectorStr = `${selectorStr}.nth(${actualIndex})`;
++        }
++
++        if (field.name) {
++          locator = locator.describe(field.name);
++        }
++        resolved = selectorStr;
++      }
++
+       const locatorSource = `await page.${resolved}`;
+       if (field.type === "textbox" || field.type === "slider") {
+         const secret = tab.context.lookupSecret(field.value);
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/keyboard.js b/node_modules/playwright/lib/mcp/browser/tools/keyboard.js
+index 41bc32e..43a4774 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/keyboard.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/keyboard.js
+@@ -31,12 +31,15 @@ const pressKey = (0, import_tool.defineTabTool)({
+     title: "Press a key",
+     description: "Press a key on the keyboard",
+     inputSchema: import_bundle.z.object({
+-      key: import_bundle.z.string().describe("Name of the key to press or a character to generate, such as `ArrowLeft` or `a`")
++      key: import_bundle.z.string().describe("Name of the key to press or a character to generate, such as `ArrowLeft` or `a`"),
++      includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
+     }),
+     type: "input"
+   },
+   handle: async (tab, params, response) => {
+-    response.setIncludeSnapshot();
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
+     response.addCode(`// Press ${params.key}`);
+     response.addCode(`await page.keyboard.press('${params.key}');`);
+     await tab.waitForCompletion(async () => {
+@@ -44,11 +47,15 @@ const pressKey = (0, import_tool.defineTabTool)({
+     });
+   }
+ });
+-const typeSchema = import_snapshot.elementSchema.extend({
++const typeSchema = import_snapshot.elementSchemaBase.extend({
+   text: import_bundle.z.string().describe("Text to type into the element"),
+   submit: import_bundle.z.boolean().optional().describe("Whether to submit entered text (press Enter after)"),
+-  slowly: import_bundle.z.boolean().optional().describe("Whether to type one character at a time. Useful for triggering key handlers in the page. By default entire text is filled in at once.")
+-});
++  slowly: import_bundle.z.boolean().optional().describe("Whether to type one character at a time. Useful for triggering key handlers in the page. By default entire text is filled in at once."),
++  includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
++}).refine(
++  (data) => (data.ref || data.selector || data.xpath),
++  { message: "At least one of: ref, selector, or xpath must be provided" }
++);
+ const type = (0, import_tool.defineTabTool)({
+   capability: "core",
+   schema: {
+@@ -59,11 +66,60 @@ const type = (0, import_tool.defineTabTool)({
+     type: "input"
+   },
+   handle: async (tab, params, response) => {
+-    const { locator, resolved } = await tab.refLocator(params);
++    // Helper to get locator from ref/selector/xpath with count validation
++    const getLocator = async () => {
++      if (params.ref) {
++        return await tab.refLocator(params);
++      }
++      let locator;
++      let selectorStr;
++      let selectorType;
++      if (params.xpath) {
++        locator = tab.page.locator(`xpath=${params.xpath}`);
++        selectorStr = `locator('xpath=${params.xpath}')`;
++        selectorType = 'xpath';
++      } else if (params.selector) {
++        locator = tab.page.locator(params.selector);
++        selectorStr = `locator('${params.selector}')`;
++        selectorType = 'css';
++      } else {
++        throw new Error("At least one of: ref, selector, or xpath must be provided");
++      }
++
++      const count = await locator.count();
++      if (count === 0) {
++        const selectorValue = params.xpath || params.selector;
++        throw new Error(`No elements found matching ${selectorType} selector: ${selectorValue}`);
++      }
++      if (count > 1) {
++        if (params.index === undefined) {
++          const selectorValue = params.xpath || params.selector;
++          throw new Error(
++            `Found ${count} elements matching ${selectorType} selector: ${selectorValue}\n` +
++            `Please specify which element using the 'index' parameter (0=first, 1=second, -1=last)`
++          );
++        }
++        const actualIndex = params.index < 0 ? count + params.index : params.index;
++        if (actualIndex < 0 || actualIndex >= count) {
++          throw new Error(`Index ${params.index} out of range. Found ${count} elements, valid indices: 0 to ${count - 1}, or -1 to -${count}`);
++        }
++        locator = locator.nth(actualIndex);
++        selectorStr = `${selectorStr}.nth(${actualIndex})`;
++      }
++
++      if (params.element) {
++        locator = locator.describe(params.element);
++      }
++      return { locator, resolved: selectorStr };
++    };
++
++    const { locator, resolved } = await getLocator();
+     const secret = tab.context.lookupSecret(params.text);
+     await tab.waitForCompletion(async () => {
+       if (params.slowly) {
+-        response.setIncludeSnapshot();
++        if (params.includeSnapshot) {
++          response.setIncludeSnapshot();
++        }
+         response.addCode(`await page.${resolved}.pressSequentially(${secret.code});`);
+         await locator.pressSequentially(secret.value);
+       } else {
+@@ -71,7 +127,9 @@ const type = (0, import_tool.defineTabTool)({
+         await locator.fill(secret.value);
+       }
+       if (params.submit) {
+-        response.setIncludeSnapshot();
++        if (params.includeSnapshot) {
++          response.setIncludeSnapshot();
++        }
+         response.addCode(`await page.${resolved}.press('Enter');`);
+         await locator.press("Enter");
+       }
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/locate.js b/node_modules/playwright/lib/mcp/browser/tools/locate.js
+new file mode 100644
+index 0000000..53c667d
+--- /dev/null
++++ b/node_modules/playwright/lib/mcp/browser/tools/locate.js
+@@ -0,0 +1,216 @@
++"use strict";
++var __defProp = Object.defineProperty;
++var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
++var __getOwnPropNames = Object.getOwnPropertyNames;
++var __hasOwnProp = Object.prototype.hasOwnProperty;
++var __export = (target, all) => {
++  for (var name in all)
++    __defProp(target, name, { get: all[name], enumerable: true });
++};
++var __copyProps = (to, from, except, desc) => {
++  if (from && typeof from === "object" || typeof from === "function") {
++    for (let key of __getOwnPropNames(from))
++      if (!__hasOwnProp.call(to, key) && key !== except)
++        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
++  }
++  return to;
++};
++var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
++var locate_exports = {};
++__export(locate_exports, {
++  default: () => locate_default
++});
++module.exports = __toCommonJS(locate_exports);
++var import_bundle = require("../../sdk/bundle");
++var import_tool = require("./tool");
++
++const locateElement = (0, import_tool.defineTabTool)({
++  capability: "core",
++  schema: {
++    name: "browser_locate_element",
++    title: "Locate element",
++    description: "Find element by coordinates (from screenshot) or by text content. Returns element details including selector, bounding box, and text.",
++    inputSchema: import_bundle.z.object({
++      x: import_bundle.z.number().optional().describe("X coordinate to find element at (use with y)"),
++      y: import_bundle.z.number().optional().describe("Y coordinate to find element at (use with x)"),
++      text: import_bundle.z.string().optional().describe("Text content to search for in elements (partial match, case-insensitive)"),
++      exact: import_bundle.z.boolean().optional().describe("When true, text must match exactly (case-sensitive). Default: false")
++    }),
++    type: "readOnly"
++  },
++  handle: async (tab, params, response) => {
++    // Validate parameters
++    const hasCoordinates = params.x !== undefined && params.y !== undefined;
++    const hasText = params.text !== undefined;
++
++    if (!hasCoordinates && !hasText) {
++      throw new Error("Either coordinates (x, y) or text must be provided");
++    }
++
++    if (hasCoordinates && params.text) {
++      throw new Error("Cannot use both coordinates and text search at the same time");
++    }
++
++    if ((params.x !== undefined) !== (params.y !== undefined)) {
++      throw new Error("Both x and y coordinates must be provided together");
++    }
++
++    let elements;
++
++    if (hasCoordinates) {
++      // Find element at coordinates
++      const result = await tab.page.evaluate(({ x, y }) => {
++        const element = document.elementFromPoint(x, y);
++        if (!element) return null;
++
++        const rect = element.getBoundingClientRect();
++        const computedStyle = window.getComputedStyle(element);
++
++        // Generate a unique selector
++        const generateSelector = (el) => {
++          if (el.id) return `#${el.id}`;
++          if (el.className && typeof el.className === 'string') {
++            const classes = el.className.trim().split(/\s+/).filter(c => c);
++            if (classes.length) return `${el.tagName.toLowerCase()}.${classes.join('.')}`;
++          }
++          return el.tagName.toLowerCase();
++        };
++
++        return {
++          tagName: element.tagName.toLowerCase(),
++          selector: generateSelector(element),
++          text: element.textContent?.trim().substring(0, 200) || '',
++          value: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.value : undefined,
++          attributes: {
++            id: element.id || undefined,
++            class: element.className || undefined,
++            name: element.getAttribute('name') || undefined,
++            type: element.getAttribute('type') || undefined,
++            placeholder: element.getAttribute('placeholder') || undefined,
++            href: element.getAttribute('href') || undefined
++          },
++          boundingBox: {
++            x: Math.round(rect.x),
++            y: Math.round(rect.y),
++            width: Math.round(rect.width),
++            height: Math.round(rect.height)
++          },
++          visible: computedStyle.visibility !== 'hidden' && computedStyle.display !== 'none',
++          clickable: element.onclick !== null || ['A', 'BUTTON', 'INPUT'].includes(element.tagName)
++        };
++      }, { x: params.x, y: params.y });
++
++      if (!result) {
++        response.addResult(`No element found at coordinates (${params.x}, ${params.y})`);
++        return;
++      }
++
++      elements = [result];
++    } else {
++      // Find elements containing text
++      const isExact = params.exact || false;
++      const searchText = params.text;
++
++      elements = await tab.page.evaluate(({ text, exact }) => {
++        const matches = [];
++        const walker = document.createTreeWalker(
++          document.body,
++          NodeFilter.SHOW_ELEMENT,
++          null
++        );
++
++        const generateSelector = (el) => {
++          if (el.id) return `#${el.id}`;
++          if (el.className && typeof el.className === 'string') {
++            const classes = el.className.trim().split(/\s+/).filter(c => c);
++            if (classes.length) return `${el.tagName.toLowerCase()}.${classes.join('.')}`;
++          }
++          return el.tagName.toLowerCase();
++        };
++
++        let node;
++        while (node = walker.nextNode()) {
++          const element = node;
++          const elementText = element.textContent?.trim() || '';
++
++          // Check if text matches
++          const hasMatch = exact
++            ? elementText === text
++            : elementText.toLowerCase().includes(text.toLowerCase());
++
++          if (hasMatch && elementText.length > 0) {
++            const rect = element.getBoundingClientRect();
++            const computedStyle = window.getComputedStyle(element);
++
++            matches.push({
++              tagName: element.tagName.toLowerCase(),
++              selector: generateSelector(element),
++              text: elementText.substring(0, 200),
++              value: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.value : undefined,
++              attributes: {
++                id: element.id || undefined,
++                class: element.className || undefined,
++                name: element.getAttribute('name') || undefined,
++                type: element.getAttribute('type') || undefined,
++                placeholder: element.getAttribute('placeholder') || undefined,
++                href: element.getAttribute('href') || undefined
++              },
++              boundingBox: {
++                x: Math.round(rect.x),
++                y: Math.round(rect.y),
++                width: Math.round(rect.width),
++                height: Math.round(rect.height)
++              },
++              visible: computedStyle.visibility !== 'hidden' && computedStyle.display !== 'none',
++              clickable: element.onclick !== null || ['A', 'BUTTON', 'INPUT'].includes(element.tagName)
++            });
++          }
++        }
++
++        return matches.slice(0, 10); // Limit to first 10 matches
++      }, { text: searchText, exact: isExact });
++
++      if (elements.length === 0) {
++        response.addResult(`No elements found containing text "${params.text}"`);
++        return;
++      }
++    }
++
++    // Format output
++    let output = '';
++
++    if (hasCoordinates) {
++      const el = elements[0];
++      output = `Found element at (${params.x}, ${params.y}):\n\n`;
++      output += `Tag: ${el.tagName}\n`;
++      output += `Selector: ${el.selector}\n`;
++      output += `Text: ${el.text}\n`;
++      if (el.value !== undefined) output += `Value: ${el.value}\n`;
++      output += `Bounding Box: (${el.boundingBox.x}, ${el.boundingBox.y}) ${el.boundingBox.width}x${el.boundingBox.height}\n`;
++      output += `Visible: ${el.visible}\n`;
++      output += `Clickable: ${el.clickable}\n`;
++      if (el.attributes.id) output += `ID: ${el.attributes.id}\n`;
++      if (el.attributes.class) output += `Class: ${el.attributes.class}\n`;
++      if (el.attributes.name) output += `Name: ${el.attributes.name}\n`;
++      if (el.attributes.type) output += `Type: ${el.attributes.type}\n`;
++      if (el.attributes.placeholder) output += `Placeholder: ${el.attributes.placeholder}\n`;
++      if (el.attributes.href) output += `Href: ${el.attributes.href}\n`;
++    } else {
++      output = `Found ${elements.length} element(s) containing "${params.text}":\n\n`;
++      elements.forEach((el, idx) => {
++        output += `${idx + 1}. ${el.tagName} - ${el.selector}\n`;
++        output += `   Text: ${el.text}\n`;
++        if (el.value !== undefined) output += `   Value: ${el.value}\n`;
++        output += `   Position: (${el.boundingBox.x}, ${el.boundingBox.y}) ${el.boundingBox.width}x${el.boundingBox.height}\n`;
++        output += `   Visible: ${el.visible}, Clickable: ${el.clickable}\n`;
++        output += '\n';
++      });
++    }
++
++    response.addResult(output.trim());
++  }
++});
++
++var locate_default = [
++  locateElement
++];
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/mouse.js b/node_modules/playwright/lib/mcp/browser/tools/mouse.js
+index 029fd80..1b62cf5 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/mouse.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/mouse.js
+@@ -54,12 +54,15 @@ const mouseClick = (0, import_tool.defineTabTool)({
+     description: "Click left mouse button at a given position",
+     inputSchema: elementSchema.extend({
+       x: import_bundle.z.number().describe("X coordinate"),
+-      y: import_bundle.z.number().describe("Y coordinate")
++      y: import_bundle.z.number().describe("Y coordinate"),
++      includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
+     }),
+     type: "input"
+   },
+   handle: async (tab, params, response) => {
+-    response.setIncludeSnapshot();
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
+     response.addCode(`// Click mouse at coordinates (${params.x}, ${params.y})`);
+     response.addCode(`await page.mouse.move(${params.x}, ${params.y});`);
+     response.addCode(`await page.mouse.down();`);
+@@ -81,12 +84,15 @@ const mouseDrag = (0, import_tool.defineTabTool)({
+       startX: import_bundle.z.number().describe("Start X coordinate"),
+       startY: import_bundle.z.number().describe("Start Y coordinate"),
+       endX: import_bundle.z.number().describe("End X coordinate"),
+-      endY: import_bundle.z.number().describe("End Y coordinate")
++      endY: import_bundle.z.number().describe("End Y coordinate"),
++      includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
+     }),
+     type: "input"
+   },
+   handle: async (tab, params, response) => {
+-    response.setIncludeSnapshot();
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
+     response.addCode(`// Drag mouse from (${params.startX}, ${params.startY}) to (${params.endX}, ${params.endY})`);
+     response.addCode(`await page.mouse.move(${params.startX}, ${params.startY});`);
+     response.addCode(`await page.mouse.down();`);
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/navigate.js b/node_modules/playwright/lib/mcp/browser/tools/navigate.js
+index 81231e5..55e0c28 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/navigate.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/navigate.js
+@@ -36,9 +36,27 @@ const navigate = (0, import_tool.defineTool)({
+   },
+   handle: async (context, params, response) => {
+     const tab = await context.ensureTab();
+-    await tab.navigate(params.url);
+-    response.setIncludeSnapshot();
+-    response.addCode(`await page.goto('${params.url}');`);
++
++    // Check if current tab is on a chrome:// URL
++    const currentUrl = tab.page.url();
++    const isChromeUrl = currentUrl.startsWith('chrome://') || currentUrl.startsWith('chrome-extension://');
++
++    if (isChromeUrl) {
++      // CDP cannot navigate chrome:// URLs - create a new tab instead
++      response.addResult(`Current tab is on ${currentUrl} which cannot be navigated via CDP. Creating new tab instead...`);
++      await context.newTab();
++      const newTab = context.currentTab();
++      await newTab.navigate(params.url);
++      response.addCode(`// Created new tab because previous was ${currentUrl}`);
++      response.addCode(`await page.goto('${params.url}');`);
++    } else {
++      // Normal navigation
++      await tab.navigate(params.url);
++      response.addCode(`await page.goto('${params.url}');`);
++    }
++
++    // Disabled auto-snapshot to save tokens - use browser_snapshot manually if needed
++    // response.setIncludeSnapshot();
+   }
+ });
+ const goBack = (0, import_tool.defineTabTool)({
+@@ -51,12 +69,67 @@ const goBack = (0, import_tool.defineTabTool)({
+     type: "action"
+   },
+   handle: async (tab, params, response) => {
++    // Suppress beforeunload dialogs before navigation
++    try {
++      await tab.page.evaluate(() => {
++        window.onbeforeunload = null;
++        const events = window.getEventListeners ? window.getEventListeners(window) : {};
++        if (events.beforeunload) {
++          events.beforeunload.forEach(listener => {
++            window.removeEventListener('beforeunload', listener.listener, listener.useCapture);
++          });
++        }
++      }).catch(() => {});
++    } catch (e) {
++      // Ignore - page might not be ready
++    }
++
+     await tab.page.goBack();
+-    response.setIncludeSnapshot();
++    // Disabled auto-snapshot to save tokens - use browser_snapshot manually if needed
++    // response.setIncludeSnapshot();
+     response.addCode(`await page.goBack();`);
+   }
+ });
++const reload = (0, import_tool.defineTabTool)({
++  capability: "core",
++  schema: {
++    name: "browser_reload",
++    title: "Reload page",
++    description: "Reload the current page",
++    inputSchema: import_bundle.z.object({}),
++    type: "action"
++  },
++  handle: async (tab, params, response) => {
++    const currentUrl = tab.page.url();
++    const isChromeUrl = currentUrl.startsWith('chrome://') || currentUrl.startsWith('chrome-extension://');
++
++    if (isChromeUrl) {
++      throw new Error(`Cannot reload ${currentUrl}. Use browser_tabs to select a different tab or create a new one.`);
++    }
++
++    // Suppress beforeunload dialogs before reload
++    try {
++      await tab.page.evaluate(() => {
++        window.onbeforeunload = null;
++        const events = window.getEventListeners ? window.getEventListeners(window) : {};
++        if (events.beforeunload) {
++          events.beforeunload.forEach(listener => {
++            window.removeEventListener('beforeunload', listener.listener, listener.useCapture);
++          });
++        }
++      }).catch(() => {});
++    } catch (e) {
++      // Ignore - page might not be ready
++    }
++
++    await tab.page.reload();
++    // Disabled auto-snapshot to save tokens - use browser_snapshot manually if needed
++    // response.setIncludeSnapshot();
++    response.addCode(`await page.reload();`);
++  }
++});
+ var navigate_default = [
+   navigate,
+-  goBack
++  goBack,
++  reload
+ ];
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/network.js b/node_modules/playwright/lib/mcp/browser/tools/network.js
+index a8ff17b..8095e51 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/network.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/network.js
+@@ -28,27 +28,180 @@ const requests = (0, import_tool.defineTabTool)({
+   schema: {
+     name: "browser_network_requests",
+     title: "List network requests",
+-    description: "Returns all network requests since loading the page",
+-    inputSchema: import_bundle.z.object({}),
++    description: "Returns all network requests since loading the page with optional filters",
++    inputSchema: import_bundle.z.object({
++      urlPattern: import_bundle.z.string().optional().describe("Filter by URL pattern (substring match, case-insensitive)"),
++      method: import_bundle.z.enum(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]).optional().describe("Filter by HTTP method")
++    }),
+     type: "readOnly"
+   },
+   handle: async (tab, params, response) => {
+-    const requests2 = await tab.requests();
+-    for (const request of requests2)
+-      response.addResult(await renderRequest(request));
++    const allRequests = await tab.requests();
++    let filteredRequests = Array.from(allRequests);
++
++    // Apply filters
++    if (params.urlPattern) {
++      const pattern = params.urlPattern.toLowerCase();
++      filteredRequests = filteredRequests.filter(req =>
++        req.url().toLowerCase().includes(pattern)
++      );
++    }
++
++    if (params.method) {
++      filteredRequests = filteredRequests.filter(req =>
++        req.method().toUpperCase() === params.method
++      );
++    }
++
++    // Build structured output with IDs
++    const results = [];
++    for (let i = 0; i < filteredRequests.length; i++) {
++      const request = filteredRequests[i];
++      const requestId = i + 1;
++      const line = await renderRequestSummary(request, requestId);
++      results.push(line);
++    }
++
++    if (results.length === 0) {
++      response.addResult("No requests found matching the filters.");
++    } else {
++      response.addResult(`Found ${results.length} request(s):\n\n` + results.join("\n"));
++    }
+   }
+ });
+-async function renderRequest(request) {
++async function renderRequestSummary(request, requestId) {
+   const result = [];
+-  result.push(`[${request.method().toUpperCase()}] ${request.url()}`);
++  result.push(`#${requestId} [${request.method().toUpperCase()}] ${request.url()}`);
+   const hasResponse = request._hasResponse;
+   if (hasResponse) {
+     const response = await request.response();
+     if (response)
+       result.push(`=> [${response.status()}] ${response.statusText()}`);
++  } else {
++    result.push(`=> [pending]`);
+   }
+   return result.join(" ");
+ }
++
++// Store requests globally so we can access them by ID
++const requestsCache = new WeakMap();
++
++const requestDetails = (0, import_tool.defineTabTool)({
++  capability: "core",
++  schema: {
++    name: "browser_network_request_details",
++    title: "Get request details",
++    description: "Get detailed information about a specific network request by ID (from browser_network_requests)",
++    inputSchema: import_bundle.z.object({
++      requestId: import_bundle.z.number().describe("Request ID from browser_network_requests output"),
++      urlPattern: import_bundle.z.string().optional().describe("URL pattern used in the original filter (required to match request ID)"),
++      method: import_bundle.z.enum(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]).optional().describe("HTTP method used in the original filter (required to match request ID)")
++    }),
++    type: "readOnly"
++  },
++  handle: async (tab, params, response) => {
++    const allRequests = await tab.requests();
++    let filteredRequests = Array.from(allRequests);
++
++    // Apply same filters as browser_network_requests to maintain ID consistency
++    if (params.urlPattern) {
++      const pattern = params.urlPattern.toLowerCase();
++      filteredRequests = filteredRequests.filter(req =>
++        req.url().toLowerCase().includes(pattern)
++      );
++    }
++
++    if (params.method) {
++      filteredRequests = filteredRequests.filter(req =>
++        req.method().toUpperCase() === params.method
++      );
++    }
++
++    const requestIndex = params.requestId - 1;
++    if (requestIndex < 0 || requestIndex >= filteredRequests.length) {
++      response.addResult(`Request #${params.requestId} not found. Valid IDs: 1-${filteredRequests.length}`);
++      return;
++    }
++
++    const request = filteredRequests[requestIndex];
++    const details = [];
++
++    details.push(`### Request #${params.requestId}`);
++    details.push(`**Method:** ${request.method().toUpperCase()}`);
++    details.push(`**URL:** ${request.url()}`);
++    details.push(`**Resource Type:** ${request.resourceType()}`);
++
++    // Request headers
++    const requestHeaders = request.headers();
++    if (Object.keys(requestHeaders).length > 0) {
++      details.push(`\n**Request Headers:**`);
++      for (const [name, value] of Object.entries(requestHeaders)) {
++        details.push(`  ${name}: ${value}`);
++      }
++    }
++
++    // Post data
++    const postData = request.postData();
++    if (postData) {
++      details.push(`\n**Request Body:**`);
++      details.push(postData.length > 1000 ? postData.substring(0, 1000) + '... (truncated)' : postData);
++    }
++
++    // Response
++    const hasResponse = request._hasResponse;
++    if (hasResponse) {
++      const resp = await request.response();
++      if (resp) {
++        details.push(`\n### Response`);
++        details.push(`**Status:** ${resp.status()} ${resp.statusText()}`);
++
++        const responseHeaders = resp.headers();
++        if (Object.keys(responseHeaders).length > 0) {
++          details.push(`\n**Response Headers:**`);
++          for (const [name, value] of Object.entries(responseHeaders)) {
++            details.push(`  ${name}: ${value}`);
++          }
++        }
++
++        // Response body
++        try {
++          const body = await resp.body();
++          const contentType = responseHeaders['content-type'] || '';
++
++          if (contentType.includes('application/json')) {
++            try {
++              const json = JSON.parse(body.toString());
++              const jsonStr = JSON.stringify(json, null, 2);
++              details.push(`\n**Response Body (JSON):**`);
++              details.push('```json');
++              details.push(jsonStr.length > 5000 ? jsonStr.substring(0, 5000) + '\n... (truncated)' : jsonStr);
++              details.push('```');
++            } catch (e) {
++              details.push(`\n**Response Body:**`);
++              const bodyStr = body.toString();
++              details.push(bodyStr.length > 1000 ? bodyStr.substring(0, 1000) + '... (truncated)' : bodyStr);
++            }
++          } else if (contentType.includes('text/')) {
++            details.push(`\n**Response Body (Text):**`);
++            const bodyStr = body.toString();
++            details.push(bodyStr.length > 1000 ? bodyStr.substring(0, 1000) + '... (truncated)' : bodyStr);
++          } else {
++            details.push(`\n**Response Body:** ${body.length} bytes (binary data)`);
++          }
++        } catch (e) {
++          details.push(`\n**Response Body:** Unable to retrieve (${e.message})`);
++        }
++      }
++    } else {
++      details.push(`\n### Response`);
++      details.push(`**Status:** Pending (request not completed yet)`);
++    }
++
++    response.addResult(details.join('\n'));
++  }
++});
++
+ var network_default = [
+-  requests
++  requests,
++  requestDetails
+ ];
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/screenshot.js b/node_modules/playwright/lib/mcp/browser/tools/screenshot.js
+index 2ffed9c..adfff2c 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/screenshot.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/screenshot.js
+@@ -42,8 +42,16 @@ var import_utils2 = require("./utils");
+ const screenshotSchema = import_bundle.z.object({
+   type: import_bundle.z.enum(["png", "jpeg"]).default("png").describe("Image format for the screenshot. Default is png."),
+   filename: import_bundle.z.string().optional().describe("File name to save the screenshot to. Defaults to `page-{timestamp}.{png|jpeg}` if not specified. Prefer relative file names to stay within the output directory."),
+-  element: import_bundle.z.string().optional().describe("Human-readable element description used to obtain permission to screenshot the element. If not provided, the screenshot will be taken of viewport. If element is provided, ref must be provided too."),
+-  ref: import_bundle.z.string().optional().describe("Exact target element reference from the page snapshot. If not provided, the screenshot will be taken of viewport. If ref is provided, element must be provided too."),
++  element: import_bundle.z.string().optional().describe("Human-readable element description used to obtain permission to screenshot the element. If not provided, the screenshot will be taken of viewport."),
++  ref: import_bundle.z.string().optional().describe("Exact target element reference from the page snapshot."),
++  selector: import_bundle.z.string().optional().describe("CSS selector to screenshot a specific element (e.g., '.header', '#main-content')."),
++  xpath: import_bundle.z.string().optional().describe("XPath selector to screenshot a specific element."),
++  clip: import_bundle.z.object({
++    x: import_bundle.z.number().describe("X coordinate"),
++    y: import_bundle.z.number().describe("Y coordinate"),
++    width: import_bundle.z.number().describe("Width"),
++    height: import_bundle.z.number().describe("Height")
++  }).optional().describe("Coordinates for clipping the screenshot to a specific region. Cannot be used with element/ref/selector or fullPage."),
+   fullPage: import_bundle.z.boolean().optional().describe("When true, takes a screenshot of the full scrollable page, instead of the currently visible viewport. Cannot be used with element screenshots.")
+ });
+ const screenshot = (0, import_tool.defineTabTool)({
+@@ -56,27 +64,67 @@ const screenshot = (0, import_tool.defineTabTool)({
+     type: "readOnly"
+   },
+   handle: async (tab, params, response) => {
+-    if (!!params.element !== !!params.ref)
+-      throw new Error("Both element and ref must be provided or neither.");
+-    if (params.fullPage && params.ref)
+-      throw new Error("fullPage cannot be used with element screenshots.");
++    // Validate mutually exclusive options
++    const exclusiveOptions = [
++      params.ref ? 'ref' : null,
++      params.selector ? 'selector' : null,
++      params.xpath ? 'xpath' : null,
++      params.clip ? 'clip' : null
++    ].filter(Boolean);
++
++    if (exclusiveOptions.length > 1)
++      throw new Error(`Cannot use multiple screenshot modes: ${exclusiveOptions.join(', ')}. Choose only one.`);
++
++    if (params.fullPage && (params.ref || params.selector || params.xpath || params.clip))
++      throw new Error("fullPage cannot be used with element/selector/xpath/clip screenshots.");
++
+     const fileType = params.type || "png";
+     const fileName = await tab.context.outputFile(params.filename || (0, import_utils2.dateAsFileName)(fileType), { origin: "llm", reason: "Saving screenshot" });
+     const options = {
+       type: fileType,
+       quality: fileType === "png" ? void 0 : 90,
+       scale: "css",
+-      ...params.fullPage !== void 0 && { fullPage: params.fullPage }
++      ...params.fullPage !== void 0 && { fullPage: params.fullPage },
++      ...params.clip && { clip: params.clip }
+     };
+-    const isElementScreenshot = params.element && params.ref;
+-    const screenshotTarget = isElementScreenshot ? params.element : params.fullPage ? "full page" : "viewport";
++
++    // Determine screenshot target and method
++    let buffer;
++    let screenshotTarget;
++    let codeSnippet;
++
++    if (params.selector) {
++      // CSS selector screenshot
++      screenshotTarget = params.element || `element matching '${params.selector}'`;
++      const locator = tab.page.locator(params.selector);
++      buffer = await locator.screenshot(options);
++      codeSnippet = `await page.locator('${params.selector}').screenshot(${javascript.formatObject(options)});`;
++    } else if (params.xpath) {
++      // XPath selector screenshot
++      screenshotTarget = params.element || `element matching '${params.xpath}'`;
++      const locator = tab.page.locator(`xpath=${params.xpath}`);
++      buffer = await locator.screenshot(options);
++      codeSnippet = `await page.locator('xpath=${params.xpath}').screenshot(${javascript.formatObject(options)});`;
++    } else if (params.clip) {
++      // Clipped region screenshot
++      screenshotTarget = `region at (${params.clip.x},${params.clip.y}) ${params.clip.width}x${params.clip.height}`;
++      buffer = await tab.page.screenshot(options);
++      codeSnippet = `await page.screenshot(${javascript.formatObject(options)});`;
++    } else if (params.ref) {
++      // Element ref screenshot (existing)
++      screenshotTarget = params.element || 'element';
++      const ref = await tab.refLocator({ element: params.element, ref: params.ref });
++      buffer = await ref.locator.screenshot(options);
++      codeSnippet = `await page.${ref.resolved}.screenshot(${javascript.formatObject(options)});`;
++    } else {
++      // Full page or viewport screenshot
++      screenshotTarget = params.fullPage ? "full page" : "viewport";
++      buffer = await tab.page.screenshot(options);
++      codeSnippet = `await page.screenshot(${javascript.formatObject(options)});`;
++    }
++
+     response.addCode(`// Screenshot ${screenshotTarget} and save it as ${fileName}`);
+-    const ref = params.ref ? await tab.refLocator({ element: params.element || "", ref: params.ref }) : null;
+-    if (ref)
+-      response.addCode(`await page.${ref.resolved}.screenshot(${javascript.formatObject(options)});`);
+-    else
+-      response.addCode(`await page.screenshot(${javascript.formatObject(options)});`);
+-    const buffer = ref ? await ref.locator.screenshot(options) : await tab.page.screenshot(options);
++    response.addCode(codeSnippet);
+     await (0, import_utils.mkdirIfNeeded)(fileName);
+     await import_fs.default.promises.writeFile(fileName, buffer);
+     response.addResult(`Took the ${screenshotTarget} screenshot and saved it as ${fileName}`);
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/snapshot.js b/node_modules/playwright/lib/mcp/browser/tools/snapshot.js
+index 12783c1..42121f9 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/snapshot.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/snapshot.js
+@@ -29,7 +29,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
+ var snapshot_exports = {};
+ __export(snapshot_exports, {
+   default: () => snapshot_default,
+-  elementSchema: () => elementSchema
++  elementSchema: () => elementSchema,
++  elementSchemaBase: () => elementSchemaBase
+ });
+ module.exports = __toCommonJS(snapshot_exports);
+ var import_bundle = require("../../sdk/bundle");
+@@ -49,15 +50,93 @@ const snapshot = (0, import_tool.defineTool)({
+     response.setIncludeSnapshot("full");
+   }
+ });
+-const elementSchema = import_bundle.z.object({
+-  element: import_bundle.z.string().describe("Human-readable element description used to obtain permission to interact with the element"),
+-  ref: import_bundle.z.string().describe("Exact target element reference from the page snapshot")
++// Helper function to get locator from ref/selector/xpath
++async function getLocatorFromParams(tab, params) {
++  // If ref is provided, use the old snapshot-based approach
++  if (params.ref) {
++    return await tab.refLocator(params);
++  }
++
++  // Otherwise use CSS selector or XPath
++  let locator;
++  let selectorStr;
++  let selectorType;
++
++  if (params.xpath) {
++    locator = tab.page.locator(`xpath=${params.xpath}`);
++    selectorStr = `locator('xpath=${params.xpath}')`;
++    selectorType = 'xpath';
++  } else if (params.selector) {
++    locator = tab.page.locator(params.selector);
++    selectorStr = `locator('${params.selector}')`;
++    selectorType = 'css';
++  } else {
++    throw new Error("At least one of: ref, selector, or xpath must be provided");
++  }
++
++  // Check element count and handle index
++  const count = await locator.count();
++
++  if (count === 0) {
++    const selectorValue = params.xpath || params.selector;
++    throw new Error(`No elements found matching ${selectorType} selector: ${selectorValue}`);
++  }
++
++  if (count > 1) {
++    const index = params.index;
++    if (index === undefined) {
++      const selectorValue = params.xpath || params.selector;
++      throw new Error(
++        `Found ${count} elements matching ${selectorType} selector: ${selectorValue}\n` +
++        `Please specify which element using the 'index' parameter:\n` +
++        `  - index: 0 for first element\n` +
++        `  - index: 1 for second element\n` +
++        `  - index: -1 for last element\n` +
++        `  - etc.`
++      );
++    }
++
++    // Handle negative indices (Python-style)
++    const actualIndex = index < 0 ? count + index : index;
++
++    if (actualIndex < 0 || actualIndex >= count) {
++      throw new Error(
++        `Index ${index} out of range. Found ${count} elements, valid indices: 0 to ${count - 1}, or -1 to -${count}`
++      );
++    }
++
++    locator = locator.nth(actualIndex);
++    selectorStr = `${selectorStr}.nth(${actualIndex})`;
++  }
++
++  // Add description if element is provided
++  if (params.element) {
++    locator = locator.describe(params.element);
++  }
++
++  return { locator, resolved: selectorStr };
++}
++
++const elementSchemaBase = import_bundle.z.object({
++  element: import_bundle.z.string().optional().describe("Human-readable element description used to obtain permission to interact with the element"),
++  ref: import_bundle.z.string().optional().describe("Exact target element reference from the page snapshot"),
++  selector: import_bundle.z.string().optional().describe("CSS selector (e.g., '#login-btn', '.submit-button')"),
++  xpath: import_bundle.z.string().optional().describe("XPath selector (e.g., '//button[@id=\"login\"]')"),
++  index: import_bundle.z.number().optional().describe("Which element to select when multiple match (0=first, 1=second, -1=last). Required if selector/xpath matches multiple elements.")
+ });
+-const clickSchema = elementSchema.extend({
++const elementSchema = elementSchemaBase.refine(
++  (data) => (data.ref || data.selector || data.xpath),
++  { message: "At least one of: ref, selector, or xpath must be provided" }
++);
++const clickSchema = elementSchemaBase.extend({
+   doubleClick: import_bundle.z.boolean().optional().describe("Whether to perform a double click instead of a single click"),
+   button: import_bundle.z.enum(["left", "right", "middle"]).optional().describe("Button to click, defaults to left"),
+-  modifiers: import_bundle.z.array(import_bundle.z.enum(["Alt", "Control", "ControlOrMeta", "Meta", "Shift"])).optional().describe("Modifier keys to press")
+-});
++  modifiers: import_bundle.z.array(import_bundle.z.enum(["Alt", "Control", "ControlOrMeta", "Meta", "Shift"])).optional().describe("Modifier keys to press"),
++  includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
++}).refine(
++  (data) => (data.ref || data.selector || data.xpath),
++  { message: "At least one of: ref, selector, or xpath must be provided" }
++);
+ const click = (0, import_tool.defineTabTool)({
+   capability: "core",
+   schema: {
+@@ -68,8 +147,10 @@ const click = (0, import_tool.defineTabTool)({
+     type: "input"
+   },
+   handle: async (tab, params, response) => {
+-    response.setIncludeSnapshot();
+-    const { locator, resolved } = await tab.refLocator(params);
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
++    const { locator, resolved } = await getLocatorFromParams(tab, params);
+     const options = {
+       button: params.button,
+       modifiers: params.modifiers
+@@ -95,19 +176,40 @@ const drag = (0, import_tool.defineTabTool)({
+     title: "Drag mouse",
+     description: "Perform drag and drop between two elements",
+     inputSchema: import_bundle.z.object({
+-      startElement: import_bundle.z.string().describe("Human-readable source element description used to obtain the permission to interact with the element"),
+-      startRef: import_bundle.z.string().describe("Exact source element reference from the page snapshot"),
+-      endElement: import_bundle.z.string().describe("Human-readable target element description used to obtain the permission to interact with the element"),
+-      endRef: import_bundle.z.string().describe("Exact target element reference from the page snapshot")
+-    }),
++      startElement: import_bundle.z.string().optional().describe("Human-readable source element description"),
++      startRef: import_bundle.z.string().optional().describe("Exact source element reference from the page snapshot"),
++      startSelector: import_bundle.z.string().optional().describe("CSS selector for source element"),
++      startXpath: import_bundle.z.string().optional().describe("XPath selector for source element"),
++      endElement: import_bundle.z.string().optional().describe("Human-readable target element description"),
++      endRef: import_bundle.z.string().optional().describe("Exact target element reference from the page snapshot"),
++      endSelector: import_bundle.z.string().optional().describe("CSS selector for target element"),
++      endXpath: import_bundle.z.string().optional().describe("XPath selector for target element"),
++      includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
++    }).refine(
++      (data) => (data.startRef || data.startSelector || data.startXpath),
++      { message: "Start element must have one of: startRef, startSelector, or startXpath" }
++    ).refine(
++      (data) => (data.endRef || data.endSelector || data.endXpath),
++      { message: "End element must have one of: endRef, endSelector, or endXpath" }
++    ),
+     type: "input"
+   },
+   handle: async (tab, params, response) => {
+-    response.setIncludeSnapshot();
+-    const [start, end] = await tab.refLocators([
+-      { ref: params.startRef, element: params.startElement },
+-      { ref: params.endRef, element: params.endElement }
+-    ]);
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
++    const start = await getLocatorFromParams(tab, {
++      element: params.startElement,
++      ref: params.startRef,
++      selector: params.startSelector,
++      xpath: params.startXpath
++    });
++    const end = await getLocatorFromParams(tab, {
++      element: params.endElement,
++      ref: params.endRef,
++      selector: params.endSelector,
++      xpath: params.endXpath
++    });
+     await tab.waitForCompletion(async () => {
+       await start.locator.dragTo(end.locator);
+     });
+@@ -120,21 +222,32 @@ const hover = (0, import_tool.defineTabTool)({
+     name: "browser_hover",
+     title: "Hover mouse",
+     description: "Hover over element on page",
+-    inputSchema: elementSchema,
++    inputSchema: elementSchemaBase.extend({
++      includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
++    }).refine(
++      (data) => (data.ref || data.selector || data.xpath),
++      { message: "At least one of: ref, selector, or xpath must be provided" }
++    ),
+     type: "input"
+   },
+   handle: async (tab, params, response) => {
+-    response.setIncludeSnapshot();
+-    const { locator, resolved } = await tab.refLocator(params);
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
++    const { locator, resolved } = await getLocatorFromParams(tab, params);
+     response.addCode(`await page.${resolved}.hover();`);
+     await tab.waitForCompletion(async () => {
+       await locator.hover();
+     });
+   }
+ });
+-const selectOptionSchema = elementSchema.extend({
+-  values: import_bundle.z.array(import_bundle.z.string()).describe("Array of values to select in the dropdown. This can be a single value or multiple values.")
+-});
++const selectOptionSchema = elementSchemaBase.extend({
++  values: import_bundle.z.array(import_bundle.z.string()).describe("Array of values to select in the dropdown. This can be a single value or multiple values."),
++  includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
++}).refine(
++  (data) => (data.ref || data.selector || data.xpath),
++  { message: "At least one of: ref, selector, or xpath must be provided" }
++);
+ const selectOption = (0, import_tool.defineTabTool)({
+   capability: "core",
+   schema: {
+@@ -145,8 +258,10 @@ const selectOption = (0, import_tool.defineTabTool)({
+     type: "input"
+   },
+   handle: async (tab, params, response) => {
+-    response.setIncludeSnapshot();
+-    const { locator, resolved } = await tab.refLocator(params);
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
++    const { locator, resolved } = await getLocatorFromParams(tab, params);
+     response.addCode(`await page.${resolved}.selectOption(${javascript.formatObject(params.values)});`);
+     await tab.waitForCompletion(async () => {
+       await locator.selectOption(params.values);
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/system.js b/node_modules/playwright/lib/mcp/browser/tools/system.js
+new file mode 100644
+index 0000000..cd277c8
+--- /dev/null
++++ b/node_modules/playwright/lib/mcp/browser/tools/system.js
+@@ -0,0 +1,51 @@
++"use strict";
++var __defProp = Object.defineProperty;
++var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
++var __getOwnPropNames = Object.getOwnPropertyNames;
++var __hasOwnProp = Object.prototype.hasOwnProperty;
++var __export = (target, all) => {
++  for (var name in all)
++    __defProp(target, name, { get: all[name], enumerable: true });
++};
++var __copyProps = (to, from, except, desc) => {
++  if (from && typeof from === "object" || typeof from === "function") {
++    for (let key of __getOwnPropNames(from))
++      if (!__hasOwnProp.call(to, key) && key !== except)
++        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
++  }
++  return to;
++};
++var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
++var system_exports = {};
++__export(system_exports, {
++  default: () => system_default
++});
++module.exports = __toCommonJS(system_exports);
++var import_bundle = require("../../sdk/bundle");
++var import_tool = require("./tool");
++
++const reloadServer = (0, import_tool.defineTool)({
++  capability: "core",
++  schema: {
++    name: "mcp_reload_server",
++    title: "Reload MCP Server",
++    description: "Reload the MCP server process. The MCP client will automatically restart it.",
++    inputSchema: import_bundle.z.object({}),
++    type: "action"
++  },
++  handle: async (context, params, response) => {
++    response.addResult("Reloading MCP server...");
++
++    // Give time for the response to be sent before exiting
++    setTimeout(() => {
++      // Exit with code 42 if running in wrapper mode to signal intentional reload
++      // Otherwise exit with 0 for normal MCP client restart
++      const exitCode = process.env.MCP_WRAPPER_MODE ? 42 : 0;
++      process.exit(exitCode);
++    }, 100);
++  }
++});
++
++var system_default = [
++  reloadServer
++];
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/tabs.js b/node_modules/playwright/lib/mcp/browser/tools/tabs.js
+index 53c331a..e7c68fc 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/tabs.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/tabs.js
+@@ -28,37 +28,191 @@ const browserTabs = (0, import_tool.defineTool)({
+   schema: {
+     name: "browser_tabs",
+     title: "Manage tabs",
+-    description: "List, create, close, or select a browser tab.",
++    description: "Manage browser tabs. IMPORTANT: Before performing any browser automation, you must first either connect to an existing tab (action='connect') or create a new tab (action='new'). Use action='list' to see available tabs, action='close' to close a tab, action='activate' to bring a tab to foreground.",
+     inputSchema: import_bundle.z.object({
+-      action: import_bundle.z.enum(["list", "new", "close", "select"]).describe("Operation to perform"),
+-      index: import_bundle.z.number().optional().describe("Tab index, used for close/select. If omitted for close, current tab is closed.")
++      action: import_bundle.z.enum(["list", "new", "close", "connect", "activate"]).describe("Operation to perform"),
++      index: import_bundle.z.number().optional().describe("Tab index, used for connect/activate/close. If omitted for close, current tab is closed."),
++      url: import_bundle.z.string().optional().describe("For new action: URL to open in the new tab (default: about:blank)"),
++      stealth: import_bundle.z.boolean().optional().describe("For connect/new actions: Enable stealth mode to avoid bot detection (default: false). Stealth mode disables console logs but makes automation undetectable.")
+     }),
+     type: "action"
+   },
+   handle: async (context, params, response) => {
+     switch (params.action) {
+       case "list": {
++        // Try extension mode first (without creating tab)
++        try {
++          await context.ensureRelay();
++          const cdpRelayServer = context.getCdpRelayServer();
++          if (cdpRelayServer) {
++            const apiUrl = cdpRelayServer.apiEndpoint().replace('/api/extensions', '/api/tabs');
++            const fetchResponse = await fetch(apiUrl, {
++              method: 'GET',
++              headers: { 'Content-Type': 'application/json' }
++            });
++
++            if (fetchResponse.ok) {
++              const result = await fetchResponse.json();
++
++              // Group tabs by window
++              const tabsByWindow = {};
++              result.tabs.forEach((tab, idx) => {
++                const windowId = tab.windowId || 0;
++                if (!tabsByWindow[windowId]) {
++                  tabsByWindow[windowId] = [];
++                }
++                tabsByWindow[windowId].push({ ...tab, globalIndex: idx });
++              });
++
++              // Format output
++              let output = `Found ${result.count} browser tab(s) across ${Object.keys(tabsByWindow).length} window(s):\n\n`;
++              Object.keys(tabsByWindow).sort((a, b) => Number(a) - Number(b)).forEach(windowId => {
++                // Check if this window is focused
++                const isWindowFocused = tabsByWindow[windowId].some(tab => tab.windowFocused);
++                output += `Window ${windowId}${isWindowFocused ? ' (focused)' : ''}:\n`;
++                tabsByWindow[windowId].forEach(tab => {
++                  // Show (active) if tab is active within its window
++                  const activeMarker = tab.active ? ' (active)' : '';
++                  // Show if tab is not automatable (chrome://, edge://, devtools://)
++                  const automatableMarker = tab.automatable === false ? ' [not automatable]' : '';
++                  output += `  ${tab.globalIndex}: ${tab.title || 'Untitled'} - ${tab.url || 'about:blank'}${activeMarker}${automatableMarker}\n`;
++                });
++                output += '\n';
++              });
++
++              response.addResult(output.trim());
++              return;
++            }
++          }
++        } catch (error) {
++          // Silently fall through to ensure tab mode
++        }
++        // Fallback to original behavior (requires creating a tab)
+         await context.ensureTab();
+         response.setIncludeTabs();
+         return;
+       }
+       case "new": {
++        // Try extension mode first (REST API)
++        let extensionModeAttempted = false;
++        try {
++          console.log('[tabs.js] NEW action received, full params object:', JSON.stringify(params));
++          console.log('[tabs.js] params.url value:', params.url);
++          console.log('[tabs.js] params.url type:', typeof params.url);
++          await context.ensureRelay();
++          const cdpRelayServer = context.getCdpRelayServer();
++          if (cdpRelayServer) {
++            extensionModeAttempted = true;
++            const apiUrl = cdpRelayServer.apiEndpoint().replace('/api/extensions', '/api/tabs');
++            const requestBody = {
++              action: 'create',
++              url: params.url || 'about:blank',
++              activate: true,
++              stealth: params.stealth ?? false
++            };
++            console.log('[tabs.js] Creating tab with params:', params, 'requestBody:', requestBody);
++            const fetchResponse = await fetch(apiUrl, {
++              method: 'POST',
++              headers: { 'Content-Type': 'application/json' },
++              body: JSON.stringify(requestBody)
++            });
++
++            if (fetchResponse.ok) {
++              const result = await fetchResponse.json();
++              response.addResult(`Created new tab and connected for automation: ${result.tab.url}`);
++              // Don't call setIncludeTabs() in extension mode - it tries to access Playwright context
++              return;
++            } else {
++              const errorText = await fetchResponse.text();
++              throw new Error(`Extension API returned status ${fetchResponse.status}: ${errorText}`);
++            }
++          }
++        } catch (error) {
++          // If extension mode was attempted but failed, throw the error
++          if (extensionModeAttempted) {
++            throw error;
++          }
++          // Otherwise fall through to Playwright mode
++        }
++
++        // Fallback to Playwright mode (only if extension mode wasn't attempted)
+         await context.newTab();
+         response.setIncludeTabs();
+         return;
+       }
+       case "close": {
+         await context.closeTab(params.index);
+-        response.setIncludeSnapshot("full");
++        // Removed auto-snapshot - not needed when closing tabs
+         return;
+       }
+-      case "select": {
++      case "connect": {
+         if (params.index === void 0)
+           throw new Error("Tab index is required");
++
++        // Try extension mode first (REST API)
++        try {
++          await context.ensureRelay();
++          const cdpRelayServer = context.getCdpRelayServer();
++          if (cdpRelayServer) {
++            const apiUrl = cdpRelayServer.apiEndpoint().replace('/api/extensions', '/api/tabs');
++            const fetchResponse = await fetch(apiUrl, {
++              method: 'POST',
++              headers: { 'Content-Type': 'application/json' },
++              body: JSON.stringify({
++                tabIndex: params.index,
++                activate: false,
++                stealth: params.stealth ?? false
++              })
++            });
++
++            if (fetchResponse.ok) {
++              const result = await fetchResponse.json();
++              response.addResult(`Connected to tab ${params.index}: ${result.tab.title} (background)`);
++              // Removed auto-snapshot - user can manually call browser_snapshot if needed
++              return;
++            }
++          }
++        } catch (error) {
++          // Fall through to Playwright mode
++        }
++
++        // Fallback to Playwright mode
+         await context.selectTab(params.index);
+-        response.setIncludeSnapshot("full");
++        // Removed auto-snapshot - user can manually call browser_snapshot if needed
+         return;
+       }
++      case "activate": {
++        if (params.index === void 0)
++          throw new Error("Tab index is required");
++
++        // Try extension mode first (REST API)
++        try {
++          await context.ensureRelay();
++          const cdpRelayServer = context.getCdpRelayServer();
++          if (cdpRelayServer) {
++            const apiUrl = cdpRelayServer.apiEndpoint().replace('/api/extensions', '/api/tabs');
++            const fetchResponse = await fetch(apiUrl, {
++              method: 'POST',
++              headers: { 'Content-Type': 'application/json' },
++              body: JSON.stringify({
++                action: 'activate',
++                tabIndex: params.index
++              })
++            });
++
++            if (fetchResponse.ok) {
++              const result = await fetchResponse.json();
++              response.addResult(`Activated tab ${params.index}: ${result.tab.title} (brought to foreground)`);
++              return;
++            } else {
++              const errorText = await fetchResponse.text();
++              throw new Error(`Extension API returned status ${fetchResponse.status}: ${errorText}`);
++            }
++          }
++        } catch (error) {
++          throw error;
++        }
++      }
+     }
+   }
+ });
+diff --git a/node_modules/playwright/lib/mcp/browser/tools/wait.js b/node_modules/playwright/lib/mcp/browser/tools/wait.js
+index 166edf3..5504fae 100644
+--- a/node_modules/playwright/lib/mcp/browser/tools/wait.js
++++ b/node_modules/playwright/lib/mcp/browser/tools/wait.js
+@@ -32,7 +32,8 @@ const wait = (0, import_tool.defineTool)({
+     inputSchema: import_bundle.z.object({
+       time: import_bundle.z.number().optional().describe("The time to wait in seconds"),
+       text: import_bundle.z.string().optional().describe("The text to wait for"),
+-      textGone: import_bundle.z.string().optional().describe("The text to wait for to disappear")
++      textGone: import_bundle.z.string().optional().describe("The text to wait for to disappear"),
++      includeSnapshot: import_bundle.z.boolean().optional().describe("Include page snapshot in response (default: false)")
+     }),
+     type: "assertion"
+   },
+@@ -55,7 +56,9 @@ const wait = (0, import_tool.defineTool)({
+       await locator.waitFor({ state: "visible" });
+     }
+     response.addResult(`Waited for ${params.text || params.textGone || params.time}`);
+-    response.setIncludeSnapshot();
++    if (params.includeSnapshot) {
++      response.setIncludeSnapshot();
++    }
+   }
+ });
+ var wait_default = [
+diff --git a/node_modules/playwright/lib/mcp/extension/cdpRelay.js b/node_modules/playwright/lib/mcp/extension/cdpRelay.js
+index e645026..9556517 100644
+--- a/node_modules/playwright/lib/mcp/extension/cdpRelay.js
++++ b/node_modules/playwright/lib/mcp/extension/cdpRelay.js
+@@ -45,15 +45,23 @@ class CDPRelayServer {
+     this._extensionConnection = null;
+     this._nextSessionId = 1;
+     this._wsHost = (0, import_http2.httpAddressToString)(server.address()).replace(/^http/, "ws");
++    this._httpHost = (0, import_http2.httpAddressToString)(server.address());
+     this._browserChannel = browserChannel;
+     this._userDataDir = userDataDir;
+     this._executablePath = executablePath;
+-    const uuid = crypto.randomUUID();
+-    this._cdpPath = `/cdp/${uuid}`;
+-    this._extensionPath = `/extension/${uuid}`;
++    this._stealthMode = false; // Default to regular Playwright mode
++    // Use fixed paths for extension to easily connect
++    this._cdpPath = `/cdp`;
++    this._extensionPath = `/extension`;
++    this._apiPath = `/api/extensions`;
+     this._resetExtensionConnection();
+     this._wss = new import_utilsBundle.wsServer({ server });
+     this._wss.on("connection", this._onConnection.bind(this));
++
++    // Add HTTP request handler for REST API
++    this._httpServer = server;
++    this._boundHttpHandler = this._handleHttpRequest.bind(this);
++    server.on("request", this._boundHttpHandler);
+   }
+   cdpEndpoint() {
+     return `${this._wsHost}${this._cdpPath}`;
+@@ -61,20 +69,26 @@ class CDPRelayServer {
+   extensionEndpoint() {
+     return `${this._wsHost}${this._extensionPath}`;
+   }
++  apiEndpoint() {
++    return `${this._httpHost}${this._apiPath}`;
++  }
+   async ensureExtensionConnectionForMCPContext(clientInfo, abortSignal, toolName) {
+     debugLogger("Ensuring extension connection for MCP context");
+     if (this._extensionConnection)
+       return;
+-    this._connectBrowser(clientInfo, toolName);
+-    debugLogger("Waiting for incoming extension connection");
++
++    // Wait for extension background worker to auto-connect (retries every 1s)
++    console.error(`\n[MCP] Waiting for Blueprint MCP extension auto-connect...\n`);
++    debugLogger("Waiting for extension background worker to connect (5s timeout)...");
++
+     await Promise.race([
+       this._extensionConnectionPromise,
+       new Promise((_, reject) => setTimeout(() => {
+-        reject(new Error(`Extension connection timeout. Make sure the "Playwright MCP Bridge" extension is installed. See https://github.com/microsoft/playwright-mcp/blob/main/extension/README.md for installation instructions.`));
+-      }, process.env.PWMCP_TEST_CONNECTION_TIMEOUT ? parseInt(process.env.PWMCP_TEST_CONNECTION_TIMEOUT, 10) : 5e3)),
++        reject(new Error('Extension connection timeout. Make sure the Blueprint MCP extension is installed and enabled.'));
++      }, 5000)),  // 5 second timeout
+       new Promise((_, reject) => abortSignal.addEventListener("abort", reject))
+     ]);
+-    debugLogger("Extension connection established");
++    debugLogger("Extension connection established via background worker auto-connect");
+   }
+   _connectBrowser(clientInfo, toolName) {
+     const mcpRelayEndpoint = `${this._wsHost}${this._extensionPath}`;
+@@ -115,11 +129,120 @@ class CDPRelayServer {
+   stop() {
+     this.closeConnections("Server stopped");
+     this._wss.close();
++    // Close the HTTP server to actually release port 5555
++    if (this._httpServer)
++      this._httpServer.close();
++    // Remove HTTP request handler
++    if (this._httpServer && this._boundHttpHandler)
++      this._httpServer.removeListener("request", this._boundHttpHandler);
+   }
+   closeConnections(reason) {
+     this._closePlaywrightConnection(reason);
+     this._closeExtensionConnection(reason);
+   }
++  async _handleHttpRequest(req, res) {
++    // Handle both /api/extensions and /api/tabs endpoints
++    const apiBaseMatch = req.url.match(/^\/api\/(\w+)/);
++    if (!apiBaseMatch)
++      return; // Let other handlers process this request
++
++    const endpoint = apiBaseMatch[1];
++    debugLogger(`HTTP ${req.method} ${req.url} (endpoint: ${endpoint})`);
++
++    try {
++      // Check if extension is connected
++      if (!this._extensionConnection) {
++        res.writeHead(503, { "Content-Type": "application/json" });
++        res.end(JSON.stringify({ error: "Extension not connected" }));
++        return;
++      }
++
++      if (endpoint === "extensions") {
++        if (req.method === "GET") {
++          // List extensions
++          const result = await this._extensionConnection.send("listExtensions", {});
++          res.writeHead(200, { "Content-Type": "application/json" });
++          res.end(JSON.stringify(result));
++        } else if (req.method === "POST") {
++          // Reload extensions - read request body
++          let body = "";
++          req.on("data", chunk => {
++            body += chunk.toString();
++          });
++          req.on("end", async () => {
++            try {
++              const params = body ? JSON.parse(body) : {};
++              const result = await this._extensionConnection.send("reloadExtensions", params);
++              res.writeHead(200, { "Content-Type": "application/json" });
++              res.end(JSON.stringify(result));
++            } catch (error) {
++              debugLogger("Error handling POST request:", error);
++              res.writeHead(500, { "Content-Type": "application/json" });
++              res.end(JSON.stringify({ error: error.message }));
++            }
++          });
++        } else {
++          res.writeHead(405, { "Content-Type": "application/json" });
++          res.end(JSON.stringify({ error: "Method not allowed" }));
++        }
++      } else if (endpoint === "tabs") {
++        if (req.method === "GET") {
++          // Get browser tabs
++          const result = await this._extensionConnection.send("getTabs", {});
++          res.writeHead(200, { "Content-Type": "application/json" });
++          res.end(JSON.stringify(result));
++        } else if (req.method === "POST") {
++          // Select or create tab - read request body
++          let body = "";
++          req.on("data", chunk => {
++            body += chunk.toString();
++          });
++          req.on("end", async () => {
++            try {
++              const params = body ? JSON.parse(body) : {};
++              debugLogger('[cdpRelay] POST /api/tabs received params:', JSON.stringify(params));
++              // Check if this is a create, select, or activate action
++              const action = params.action || (params.tabIndex !== undefined ? "select" : "create");
++
++              let result;
++              if (action === "create") {
++                const createParams = {
++                  url: params.url,
++                  activate: params.activate
++                };
++                debugLogger('[cdpRelay] Sending createTab with params:', JSON.stringify(createParams));
++                result = await this._extensionConnection.send("createTab", createParams);
++                debugLogger('[cdpRelay] createTab result:', JSON.stringify(result));
++              } else if (action === "activate") {
++                debugLogger('[cdpRelay] Sending activateTab with params:', JSON.stringify(params));
++                result = await this._extensionConnection.send("activateTab", params);
++                debugLogger('[cdpRelay] activateTab result:', JSON.stringify(result));
++              } else {
++                result = await this._extensionConnection.send("selectTab", params);
++              }
++
++              res.writeHead(200, { "Content-Type": "application/json" });
++              res.end(JSON.stringify(result));
++            } catch (error) {
++              debugLogger("Error handling POST request:", error);
++              res.writeHead(500, { "Content-Type": "application/json" });
++              res.end(JSON.stringify({ error: error.message }));
++            }
++          });
++        } else {
++          res.writeHead(405, { "Content-Type": "application/json" });
++          res.end(JSON.stringify({ error: "Method not allowed" }));
++        }
++      } else {
++        res.writeHead(404, { "Content-Type": "application/json" });
++        res.end(JSON.stringify({ error: "Unknown endpoint" }));
++      }
++    } catch (error) {
++      debugLogger("Error in HTTP handler:", error);
++      res.writeHead(500, { "Content-Type": "application/json" });
++      res.end(JSON.stringify({ error: error.message }));
++    }
++  }
+   _onConnection(ws2, request) {
+     const url = new URL(`http://localhost${request.url}`);
+     debugLogger(`New connection to ${url.pathname}`);
+@@ -195,6 +318,13 @@ ${data.toString()}
+   }
+   _handleExtensionMessage(method, params) {
+     switch (method) {
++      case "setStealthMode":
++        this._stealthMode = params.stealthMode === true;
++        // Set environment variable for Playwright patches
++        process.env.STEALTH_MODE = this._stealthMode ? 'true' : 'false';
++        debugLogger(`Stealth mode set to: ${this._stealthMode}`);
++        console.error(`[CDPRelayServer] Stealth mode set to: ${this._stealthMode}, process.env.STEALTH_MODE=${process.env.STEALTH_MODE}`);
++        break;
+       case "forwardCDPEvent":
+         const sessionId = params.sessionId || this._connectedTabInfo?.sessionId;
+         this._sendToPlaywright({
+@@ -205,6 +335,9 @@ ${data.toString()}
+         break;
+     }
+   }
++  isStealthMode() {
++    return this._stealthMode;
++  }
+   async _handlePlaywrightMessage(message) {
+     debugLogger("\u2190 Playwright:", `${message.method} (id=${message.id})`);
+     const { id, sessionId, method, params } = message;
+@@ -257,6 +390,45 @@ ${data.toString()}
+       case "Target.getTargetInfo": {
+         return this._connectedTabInfo?.targetInfo;
+       }
++      case "Browser.reloadExtensions": {
++        debugLogger("Reloading unpacked extensions");
++        return await this._extensionConnection.send("reloadExtensions", params || {});
++      }
++      case "Browser.listExtensions": {
++        debugLogger("Listing unpacked extensions");
++        return await this._extensionConnection.send("listExtensions", {});
++      }
++    }
++    // Handle extension operations at page level too (works through existing CDP session)
++    if (method === "Runtime.evaluate" && params?.expression) {
++      debugLogger(`Runtime.evaluate expression: ${params.expression}`);
++      if (params.expression.includes("__RELOAD_EXTENSIONS__")) {
++        debugLogger("Reloading unpacked extensions via Runtime.evaluate");
++        // Extract extensionName from the expression if present
++        const match = params.expression.match(/__RELOAD_EXTENSIONS__:(.+)/);
++        const extensionName = match ? match[1] : undefined;
++        const result = await this._extensionConnection.send("reloadExtensions", { extensionName });
++        // Return as a serialized JSON string so Playwright can properly deserialize it
++        const serialized = JSON.stringify(result);
++        return {
++          result: {
++            type: "string",
++            value: serialized
++          }
++        };
++      }
++      if (params.expression.includes("__LIST_EXTENSIONS__")) {
++        debugLogger("Listing unpacked extensions via Runtime.evaluate");
++        const result = await this._extensionConnection.send("listExtensions", {});
++        // Return as a serialized JSON string so Playwright can properly deserialize it
++        const serialized = JSON.stringify(result);
++        return {
++          result: {
++            type: "string",
++            value: serialized
++          }
++        };
++      }
+     }
+     return await this._forwardToExtension(method, params, sessionId);
+   }
+diff --git a/node_modules/playwright/lib/mcp/extension/extensionContextFactory.js b/node_modules/playwright/lib/mcp/extension/extensionContextFactory.js
+index 37738e5..46fbd81 100644
+--- a/node_modules/playwright/lib/mcp/extension/extensionContextFactory.js
++++ b/node_modules/playwright/lib/mcp/extension/extensionContextFactory.js
+@@ -36,11 +36,55 @@ var import_utilsBundle = require("playwright-core/lib/utilsBundle");
+ var import_http = require("../sdk/http");
+ var import_cdpRelay = require("./cdpRelay");
+ const debugLogger = (0, import_utilsBundle.debug)("pw:mcp:relay");
++
++// Dynamically load patchright only if needed
++let patchright = null;
++function getPatchright() {
++  if (!patchright) {
++    try {
++      patchright = require("patchright");
++      debugLogger("Patchright loaded successfully");
++    } catch (e) {
++      debugLogger("Failed to load patchright:", e.message);
++      throw new Error("Stealth mode requires patchright to be installed. Run: npm install patchright");
++    }
++  }
++  return patchright;
++}
+ class ExtensionContextFactory {
+-  constructor(browserChannel, userDataDir, executablePath) {
++  constructor(browserChannel, userDataDir, executablePath, serverConfig) {
+     this._browserChannel = browserChannel;
+     this._userDataDir = userDataDir;
+     this._executablePath = executablePath;
++    this._serverConfig = serverConfig || {};
++    this._cdpRelayServer = null;
++    // Browser pool: Map<mode, Browser> where mode is 'playwright' or 'patchright'
++    this._browserPool = new Map();
++    // Client to mode mapping: Map<clientId, mode>
++    this._clientModes = new Map();
++  }
++
++  setClientStealthMode(clientInfo, stealthMode) {
++    const clientId = this._getClientId(clientInfo);
++    const mode = stealthMode ? 'patchright' : 'playwright';
++    debugLogger(`Setting client ${clientId} to mode: ${mode}`);
++    console.error(`[ExtensionContextFactory] Setting client ${clientId} to mode: ${mode}`);
++    this._clientModes.set(clientId, mode);
++  }
++
++  _getClientId(clientInfo) {
++    return `${clientInfo.name || 'unknown'}-${clientInfo.version || '0'}`;
++  }
++  getCdpRelayServer() {
++    return this._cdpRelayServer;
++  }
++  async ensureRelay(clientInfo, abortSignal, toolName) {
++    if (!this._relayPromise) {
++      this._relayPromise = this._startRelay(abortSignal);
++    }
++    const relay = await this._relayPromise;
++    await relay.ensureExtensionConnectionForMCPContext(clientInfo, abortSignal, toolName);
++    return relay;
+   }
+   async createContext(clientInfo, abortSignal, toolName) {
+     const browser = await this._obtainBrowser(clientInfo, abortSignal, toolName);
+@@ -53,17 +97,93 @@ class ExtensionContextFactory {
+     };
+   }
+   async _obtainBrowser(clientInfo, abortSignal, toolName) {
+-    const relay = await this._startRelay(abortSignal);
+-    await relay.ensureExtensionConnectionForMCPContext(clientInfo, abortSignal, toolName);
+-    return await playwright.chromium.connectOverCDP(relay.cdpEndpoint());
++    const relay = await this.ensureRelay(clientInfo, abortSignal, toolName);
++    const clientId = this._getClientId(clientInfo);
++
++    // Determine which mode this client should use
++    const mode = this._clientModes.get(clientId) || 'playwright'; // Default to regular playwright
++    debugLogger(`Client ${clientId} requesting browser in mode: ${mode}`);
++    console.error(`[ExtensionContextFactory] Client ${clientId} requesting browser in mode: ${mode}`);
++
++    // Check if we already have a browser for this mode
++    if (this._browserPool.has(mode)) {
++      const existingBrowser = this._browserPool.get(mode);
++      if (existingBrowser && existingBrowser.isConnected()) {
++        debugLogger(`Reusing existing ${mode} browser`);
++        console.error(`[ExtensionContextFactory] Reusing existing ${mode} browser`);
++        return existingBrowser;
++      } else {
++        // Browser is disconnected, remove from pool
++        debugLogger(`Removing disconnected ${mode} browser from pool`);
++        this._browserPool.delete(mode);
++      }
++    }
++
++    // Create new browser for this mode
++    debugLogger(`Creating new ${mode} browser`);
++    console.error(`[ExtensionContextFactory] Creating new ${mode} browser`);
++
++    let browser;
++    let retryCount = 0;
++    const maxRetries = 3;
++
++    while (retryCount < maxRetries) {
++      try {
++        if (mode === 'patchright') {
++          const pr = getPatchright();
++          browser = await pr.chromium.connectOverCDP(relay.cdpEndpoint());
++        } else {
++          browser = await playwright.chromium.connectOverCDP(relay.cdpEndpoint());
++        }
++        break; // Success, exit retry loop
++      } catch (error) {
++        retryCount++;
++        const isChromeUrlError = error.message && error.message.includes('Cannot access a chrome://');
++
++        if (isChromeUrlError && retryCount < maxRetries) {
++          console.error(`[ExtensionContextFactory] Chrome URL error detected, requesting tab switch (attempt ${retryCount}/${maxRetries})`);
++          debugLogger(`Chrome URL error, retrying after tab switch: ${error.message}`);
++
++          // Tell the extension to switch to a valid tab
++          // The relay should have a method to request tab switch
++          await new Promise(resolve => setTimeout(resolve, 500)); // Brief delay
++          continue;
++        }
++
++        // Re-throw if not chrome:// error or max retries reached
++        throw error;
++      }
++    }
++
++    if (!browser) {
++      throw new Error('Failed to connect to browser after multiple attempts');
++    }
++
++    // Store in pool
++    this._browserPool.set(mode, browser);
++
++    // Set up cleanup when browser disconnects
++    browser.on('disconnected', () => {
++      debugLogger(`Browser ${mode} disconnected, removing from pool`);
++      console.error(`[ExtensionContextFactory] Browser ${mode} disconnected, removing from pool`);
++      this._browserPool.delete(mode);
++    });
++
++    return browser;
+   }
+   async _startRelay(abortSignal) {
+-    const httpServer = await (0, import_http.startHttpServer)({});
++    // Use fixed port 5555 for extension connection (IPv4)
++    const relayConfig = {
++      port: 5555,
++      host: '127.0.0.1'
++    };
++    const httpServer = await (0, import_http.startHttpServer)(relayConfig);
+     if (abortSignal.aborted) {
+       httpServer.close();
+       throw new Error(abortSignal.reason);
+     }
+     const cdpRelayServer = new import_cdpRelay.CDPRelayServer(httpServer, this._browserChannel, this._userDataDir, this._executablePath);
++    this._cdpRelayServer = cdpRelayServer;
+     abortSignal.addEventListener("abort", () => cdpRelayServer.stop());
+     debugLogger(`CDP relay server started, extension endpoint: ${cdpRelayServer.extensionEndpoint()}.`);
+     return cdpRelayServer;
+diff --git a/node_modules/playwright/lib/mcp/program.js b/node_modules/playwright/lib/mcp/program.js
+index 1c51044..6b7ce8c 100644
+--- a/node_modules/playwright/lib/mcp/program.js
++++ b/node_modules/playwright/lib/mcp/program.js
+@@ -40,15 +40,18 @@ var import_proxyBackend = require("./sdk/proxyBackend");
+ var import_browserServerBackend = require("./browser/browserServerBackend");
+ var import_extensionContextFactory = require("./extension/extensionContextFactory");
+ function decorateCommand(command, version) {
+-  command.option("--allowed-hosts <hosts...>", "comma-separated list of hosts this server is allowed to serve from. Defaults to the host the server is bound to. Pass '*' to disable the host check.", import_config.commaSeparatedList).option("--allowed-origins <origins>", "semicolon-separated list of origins to allow the browser to request. Default is to allow all.", import_config.semicolonSeparatedList).option("--blocked-origins <origins>", "semicolon-separated list of origins to block the browser from requesting. Blocklist is evaluated before allowlist. If used without the allowlist, requests not matching the blocklist are still allowed.", import_config.semicolonSeparatedList).option("--block-service-workers", "block service workers").option("--browser <browser>", "browser or chrome channel to use, possible values: chrome, firefox, webkit, msedge.").option("--caps <caps>", "comma-separated list of additional capabilities to enable, possible values: vision, pdf.", import_config.commaSeparatedList).option("--cdp-endpoint <endpoint>", "CDP endpoint to connect to.").option("--cdp-header <headers...>", "CDP headers to send with the connect request, multiple can be specified.", import_config.headerParser).option("--config <path>", "path to the configuration file.").option("--device <device>", 'device to emulate, for example: "iPhone 15"').option("--executable-path <path>", "path to the browser executable.").option("--extension", 'Connect to a running browser instance (Edge/Chrome only). Requires the "Playwright MCP Bridge" browser extension to be installed.').option("--grant-permissions <permissions...>", 'List of permissions to grant to the browser context, for example "geolocation", "clipboard-read", "clipboard-write".', import_config.commaSeparatedList).option("--headless", "run browser in headless mode, headed by default").option("--host <host>", "host to bind server to. Default is localhost. Use 0.0.0.0 to bind to all interfaces.").option("--ignore-https-errors", "ignore https errors").option("--init-script <path...>", "path to JavaScript file to add as an initialization script. The script will be evaluated in every page before any of the page's scripts. Can be specified multiple times.").option("--isolated", "keep the browser profile in memory, do not save it to disk.").option("--image-responses <mode>", 'whether to send image responses to the client. Can be "allow" or "omit", Defaults to "allow".').option("--no-sandbox", "disable the sandbox for all process types that are normally sandboxed.").option("--output-dir <path>", "path to the directory for output files.").option("--port <port>", "port to listen on for SSE transport.").option("--proxy-bypass <bypass>", 'comma-separated domains to bypass proxy, for example ".com,chromium.org,.domain.com"').option("--proxy-server <proxy>", 'specify proxy server, for example "http://myproxy:3128" or "socks5://myproxy:8080"').option("--save-session", "Whether to save the Playwright MCP session into the output directory.").option("--save-trace", "Whether to save the Playwright Trace of the session into the output directory.").option("--save-video <size>", 'Whether to save the video of the session into the output directory. For example "--save-video=800x600"', import_config.resolutionParser.bind(null, "--save-video")).option("--secrets <path>", "path to a file containing secrets in the dotenv format", import_config.dotenvFileLoader).option("--shared-browser-context", "reuse the same browser context between all connected HTTP clients.").option("--storage-state <path>", "path to the storage state file for isolated sessions.").option("--test-id-attribute <attribute>", 'specify the attribute to use for test ids, defaults to "data-testid"').option("--timeout-action <timeout>", "specify action timeout in milliseconds, defaults to 5000ms", import_config.numberParser).option("--timeout-navigation <timeout>", "specify navigation timeout in milliseconds, defaults to 60000ms", import_config.numberParser).option("--user-agent <ua string>", "specify user agent string").option("--user-data-dir <path>", "path to the user data directory. If not specified, a temporary directory will be created.").option("--viewport-size <size>", 'specify browser viewport size in pixels, for example "1280x720"', import_config.resolutionParser.bind(null, "--viewport-size")).addOption(new import_utilsBundle.ProgramOption("--connect-tool", "Allow to switch between different browser connection methods.").hideHelp()).addOption(new import_utilsBundle.ProgramOption("--vision", "Legacy option, use --caps=vision instead").hideHelp()).action(async (options) => {
++  command.option("--allowed-hosts <hosts...>", "comma-separated list of hosts this server is allowed to serve from. Defaults to the host the server is bound to. Pass '*' to disable the host check.", import_config.commaSeparatedList).option("--allowed-origins <origins>", "semicolon-separated list of origins to allow the browser to request. Default is to allow all.", import_config.semicolonSeparatedList).option("--blocked-origins <origins>", "semicolon-separated list of origins to block the browser from requesting. Blocklist is evaluated before allowlist. If used without the allowlist, requests not matching the blocklist are still allowed.", import_config.semicolonSeparatedList).option("--block-service-workers", "block service workers").option("--browser <browser>", "browser or chrome channel to use, possible values: chrome, firefox, webkit, msedge.").option("--caps <caps>", "comma-separated list of additional capabilities to enable, possible values: vision, pdf.", import_config.commaSeparatedList).option("--cdp-endpoint <endpoint>", "CDP endpoint to connect to.").option("--cdp-header <headers...>", "CDP headers to send with the connect request, multiple can be specified.", import_config.headerParser).option("--config <path>", "path to the configuration file.").option("--debug", "enable debug mode with verbose output for connection and status tools").option("--device <device>", 'device to emulate, for example: "iPhone 15"').option("--executable-path <path>", "path to the browser executable.").option("--extension", 'Connect to a running browser instance (Edge/Chrome only). Requires the "Playwright MCP Bridge" browser extension to be installed.').option("--grant-permissions <permissions...>", 'List of permissions to grant to the browser context, for example "geolocation", "clipboard-read", "clipboard-write".', import_config.commaSeparatedList).option("--headless", "run browser in headless mode, headed by default").option("--host <host>", "host to bind server to. Default is localhost. Use 0.0.0.0 to bind to all interfaces.").option("--ignore-https-errors", "ignore https errors").option("--init-script <path...>", "path to JavaScript file to add as an initialization script. The script will be evaluated in every page before any of the page's scripts. Can be specified multiple times.").option("--isolated", "keep the browser profile in memory, do not save it to disk.").option("--image-responses <mode>", 'whether to send image responses to the client. Can be "allow" or "omit", Defaults to "allow".').option("--no-sandbox", "disable the sandbox for all process types that are normally sandboxed.").option("--output-dir <path>", "path to the directory for output files.").option("--port <port>", "port to listen on for SSE transport.").option("--proxy-bypass <bypass>", 'comma-separated domains to bypass proxy, for example ".com,chromium.org,.domain.com"').option("--proxy-server <proxy>", 'specify proxy server, for example "http://myproxy:3128" or "socks5://myproxy:8080"').option("--save-session", "Whether to save the Playwright MCP session into the output directory.").option("--save-trace", "Whether to save the Playwright Trace of the session into the output directory.").option("--save-video <size>", 'Whether to save the video of the session into the output directory. For example "--save-video=800x600"', import_config.resolutionParser.bind(null, "--save-video")).option("--secrets <path>", "path to a file containing secrets in the dotenv format", import_config.dotenvFileLoader).option("--shared-browser-context", "reuse the same browser context between all connected HTTP clients.").option("--storage-state <path>", "path to the storage state file for isolated sessions.").option("--test-id-attribute <attribute>", 'specify the attribute to use for test ids, defaults to "data-testid"').option("--timeout-action <timeout>", "specify action timeout in milliseconds, defaults to 5000ms", import_config.numberParser).option("--timeout-navigation <timeout>", "specify navigation timeout in milliseconds, defaults to 60000ms", import_config.numberParser).option("--user-agent <ua string>", "specify user agent string").option("--user-data-dir <path>", "path to the user data directory. If not specified, a temporary directory will be created.").option("--viewport-size <size>", 'specify browser viewport size in pixels, for example "1280x720"', import_config.resolutionParser.bind(null, "--viewport-size")).addOption(new import_utilsBundle.ProgramOption("--connect-tool", "Allow to switch between different browser connection methods.").hideHelp()).addOption(new import_utilsBundle.ProgramOption("--vision", "Legacy option, use --caps=vision instead").hideHelp()).action(async (options) => {
+     (0, import_watchdog.setupExitWatchdog)();
++    if (options.debug) {
++      process.env.MCP_DEBUG = 'true';
++    }
+     if (options.vision) {
+       console.error("The --vision option is deprecated, use --caps=vision instead");
+       options.caps = "vision";
+     }
+     const config = await (0, import_config.resolveCLIConfig)(options);
+     const browserContextFactory = (0, import_browserContextFactory.contextFactory)(config);
+-    const extensionContextFactory = new import_extensionContextFactory.ExtensionContextFactory(config.browser.launchOptions.channel || "chrome", config.browser.userDataDir, config.browser.launchOptions.executablePath);
++    const extensionContextFactory = new import_extensionContextFactory.ExtensionContextFactory(config.browser.launchOptions.channel || "chrome", config.browser.userDataDir, config.browser.launchOptions.executablePath, config.server);
+     if (options.extension) {
+       const serverBackendFactory = {
+         name: "Playwright w/ extension",
+diff --git a/node_modules/playwright/lib/mcp/sdk/server.js b/node_modules/playwright/lib/mcp/sdk/server.js
+index af00d47..20649d9 100644
+--- a/node_modules/playwright/lib/mcp/sdk/server.js
++++ b/node_modules/playwright/lib/mcp/sdk/server.js
+@@ -52,7 +52,9 @@ async function wrapInProcess(backend) {
+ function createServer(name, version, backend, runHeartbeat) {
+   const server = new mcpBundle.Server({ name, version }, {
+     capabilities: {
+-      tools: {}
++      tools: {
++        listChanged: true
++      }
+     }
+   });
+   server.setRequestHandler(mcpBundle.ListToolsRequestSchema, async () => {

@@ -44,8 +44,11 @@ export class RelayConnection {
   private _tabPromise: Promise<void>;
   private _tabPromiseResolve!: () => void;
   private _closed = false;
+  private _stealthMode: boolean = false;
 
   onclose?: () => void;
+  onStealthModeSet?: (stealth: boolean) => void;
+  onTabConnected?: (tabId: number) => void;
 
   constructor(ws: WebSocket) {
     this._debuggee = { };
@@ -61,8 +64,11 @@ export class RelayConnection {
   }
 
   // Either setTabId or close is called after creating the connection.
-  setTabId(tabId: number): void {
-    this._debuggee = { tabId };
+  setTabId(tabId: number | undefined): void {
+    if (tabId !== undefined) {
+      this._debuggee = { tabId };
+    }
+    // Always resolve the promise, even in lazy mode without tabId
     this._tabPromiseResolve();
   }
 
@@ -86,6 +92,17 @@ export class RelayConnection {
   private _onDebuggerEvent(source: chrome.debugger.DebuggerSession, method: string, params: any): void {
     if (source.tabId !== this._debuggee.tabId)
       return;
+
+    // Stealth mode: Filter out console-related CDP events
+    if (this._stealthMode && (
+      method.startsWith('Runtime.consoleAPICalled') ||
+      method.startsWith('Runtime.exceptionThrown') ||
+      method.startsWith('Console.')
+    )) {
+      debugLog('Stealth mode: Blocking console event:', method);
+      return;
+    }
+
     debugLog('Forwarding CDP event:', method, params);
     const sessionId = source.sessionId;
     this._sendMessage({
@@ -137,12 +154,79 @@ export class RelayConnection {
   private async _handleCommand(message: ProtocolCommand): Promise<any> {
     if (message.method === 'attachToTab') {
       await this._tabPromise;
-      debugLog('Attaching debugger to tab:', this._debuggee);
-      await chrome.debugger.attach(this._debuggee, '1.3');
+
+      // This is only called for lazy startup mode (auto-connect without specific tab)
+      // Create a fresh about:blank tab to avoid chrome:// URL issues
+      if (!this._debuggee.tabId) {
+        debugLog('No tab specified (lazy startup mode), creating fresh about:blank tab');
+        const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+        this._debuggee = { tabId: tab.id };
+        debugLog('Created fresh tab:', tab.id, '(about:blank)');
+
+        // Notify background script
+        if (this.onTabConnected && tab.id) {
+          this.onTabConnected(tab.id);
+        }
+
+        // Wait for tab to be ready
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        debugLog('Attaching debugger to tab:', this._debuggee);
+        await chrome.debugger.attach(this._debuggee, '1.3');
+      }
+
+      // If tab was already attached by _selectTab or _createTab, just get info
       const result: any = await chrome.debugger.sendCommand(this._debuggee, 'Target.getTargetInfo');
       return {
         targetInfo: result?.targetInfo,
       };
+    }
+    if (message.method === 'reloadExtensions') {
+      const extensionName = message.params?.extensionName;
+      debugLog('Reloading unpacked extensions...', extensionName ? `(${extensionName})` : '(all)');
+      return await this._reloadExtensions(extensionName);
+    }
+    if (message.method === 'listExtensions') {
+      debugLog('Listing unpacked extensions...');
+      return await this._listExtensions();
+    }
+    if (message.method === 'getTabs') {
+      debugLog('Getting browser tabs...');
+      return await this._getTabs();
+    }
+    if (message.method === 'selectTab') {
+      const tabIndex = message.params?.tabIndex;
+      if (tabIndex === undefined) {
+        throw new Error('tabIndex parameter is required');
+      }
+      const activate = message.params?.activate ?? false;
+      const stealth = message.params?.stealth ?? false;
+      debugLog('Selecting tab:', tabIndex, 'activate:', activate, 'stealth:', stealth);
+      return await this._selectTab(tabIndex, activate, stealth);
+    }
+    if (message.method === 'createTab') {
+      const url = message.params?.url || 'about:blank';
+      const activate = message.params?.activate ?? true;
+      const stealth = message.params?.stealth ?? false;
+      debugLog('Creating new tab - received params:', message.params);
+      debugLog('Creating new tab - url:', url, 'activate:', activate, 'stealth:', stealth);
+      return await this._createTab(url, activate, stealth);
+    }
+    if (message.method === 'activateTab') {
+      const tabIndex = message.params?.tabIndex;
+      if (tabIndex === undefined) {
+        throw new Error('tabIndex parameter is required');
+      }
+      debugLog('Activating tab:', tabIndex);
+      return await this._activateTab(tabIndex);
+    }
+    if (message.method === 'reloadSelf') {
+      debugLog('Reloading Blueprint MCP for Chrome extension...');
+      // Reload this extension using chrome.runtime.reload()
+      setTimeout(() => {
+        chrome.runtime.reload();
+      }, 100);
+      return { reloaded: true };
     }
     if (!this._debuggee.tabId)
       throw new Error('No tab is connected. Please go to the Playwright MCP extension and select the tab you want to connect to.');
@@ -160,6 +244,281 @@ export class RelayConnection {
           params
       );
     }
+  }
+
+  private async _listExtensions(): Promise<any> {
+    const extensions = await chrome.management.getAll();
+    const unpackedExtensions = extensions
+      .filter(ext => ext.installType === 'development')
+      .map(ext => ({
+        name: ext.name,
+        id: ext.id,
+        enabled: ext.enabled,
+        version: ext.version,
+      }));
+
+    return {
+      extensions: unpackedExtensions,
+      count: unpackedExtensions.length,
+    };
+  }
+
+  private async _reloadExtensions(extensionName?: string): Promise<any> {
+    // Special case: reloading Blueprint MCP itself
+    if (extensionName === 'Blueprint MCP for Chrome') {
+      debugLog('Reloading Blueprint MCP for Chrome using chrome.runtime.reload()');
+      setTimeout(() => {
+        chrome.runtime.reload();
+      }, 100);
+      return {
+        reloadedCount: 1,
+        reloadedExtensions: ['Blueprint MCP for Chrome'],
+      };
+    }
+
+    // Remember current tab before reloading (but only if it's not a chrome:// URL)
+    const currentTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    let targetTabId: number | undefined;
+
+    if (currentTabs.length > 0 && currentTabs[0].url &&
+        !currentTabs[0].url.startsWith('chrome://') &&
+        !currentTabs[0].url.startsWith('chrome-extension://')) {
+      targetTabId = currentTabs[0].id;
+    }
+
+    // If current tab is chrome://, find the first non-chrome:// tab
+    if (targetTabId === undefined) {
+      const allTabs = await chrome.tabs.query({});
+      const validTab = allTabs.find(tab =>
+        tab.url &&
+        !tab.url.startsWith('chrome://') &&
+        !tab.url.startsWith('chrome-extension://')
+      );
+      if (validTab) {
+        targetTabId = validTab.id;
+      }
+    }
+
+    const extensions = await chrome.management.getAll();
+    const reloadedExtensions: string[] = [];
+
+    for (const ext of extensions) {
+      if ((ext.installType === 'development') &&
+          (ext.enabled === true)) {
+
+        // If extensionName is specified, only reload matching extension
+        if (extensionName && ext.name !== extensionName) {
+          continue;
+        }
+
+        try {
+          await chrome.management.setEnabled(ext.id, false);
+          await chrome.management.setEnabled(ext.id, true);
+          reloadedExtensions.push(ext.name);
+          debugLog(`Reloaded extension: ${ext.name}`);
+        } catch (error: any) {
+          debugLog(`Failed to reload extension ${ext.name}:`, error);
+        }
+      }
+    }
+
+    // Switch to a valid tab (not chrome://)
+    if (targetTabId !== undefined) {
+      try {
+        await chrome.tabs.update(targetTabId, { active: true });
+        debugLog(`Switched to valid tab ${targetTabId}`);
+      } catch (error: any) {
+        debugLog(`Failed to switch to tab ${targetTabId}:`, error);
+      }
+    } else {
+      // No valid tabs found, create a new one with about:blank
+      debugLog('No valid tabs found, creating new tab with about:blank');
+      try {
+        const newTab = await chrome.tabs.create({ url: 'about:blank', active: true });
+        debugLog(`Created new tab ${newTab.id}`);
+      } catch (error: any) {
+        debugLog(`Failed to create new tab:`, error);
+      }
+    }
+
+    return {
+      reloadedCount: reloadedExtensions.length,
+      reloadedExtensions,
+    };
+  }
+
+  private async _getTabs(): Promise<any> {
+    const allTabs = await chrome.tabs.query({});
+
+    // Get the last focused window (the one the user is actually looking at)
+    const focusedWindow = await chrome.windows.getLastFocused();
+    const focusedWindowId = focusedWindow.id;
+
+    return {
+      tabs: allTabs.map((tab, index) => {
+        const isAutomatable = tab.url && !['chrome:', 'edge:', 'devtools:'].some(scheme => tab.url!.startsWith(scheme));
+        return {
+          id: tab.id,
+          title: tab.title,
+          url: tab.url,
+          active: tab.active,
+          windowId: tab.windowId,
+          index: index, // Use array index for consistency
+          windowFocused: tab.windowId === focusedWindowId,
+          automatable: isAutomatable,
+        };
+      }),
+      count: allTabs.length,
+      focusedWindowId,
+    };
+  }
+
+  private async _selectTab(tabIndex: number, activate: boolean = false, stealth: boolean = false): Promise<any> {
+    const allTabs = await chrome.tabs.query({});
+
+    if (tabIndex < 0 || tabIndex >= allTabs.length) {
+      throw new Error(`Tab index ${tabIndex} out of range (0-${allTabs.length - 1})`);
+    }
+
+    const selectedTab = allTabs[tabIndex];
+    if (!selectedTab.id) {
+      throw new Error('Invalid tab ID');
+    }
+
+    // Check if tab is automatable (not chrome://, edge://, devtools://)
+    const isAutomatable = selectedTab.url && !['chrome:', 'edge:', 'devtools:'].some(scheme => selectedTab.url!.startsWith(scheme));
+    if (!isAutomatable) {
+      throw new Error(`Cannot automate tab ${tabIndex}: "${selectedTab.title}" (${selectedTab.url || 'no url'}) - chrome://, edge://, and devtools:// pages cannot be automated`);
+    }
+
+    // Optionally switch to the tab (default: false - attach in background)
+    if (activate) {
+      await chrome.tabs.update(selectedTab.id, { active: true });
+      await chrome.windows.update(selectedTab.windowId!, { focused: true });
+    }
+
+    // Update the debuggee to attach to this tab
+    this._debuggee = { tabId: selectedTab.id };
+
+    // Notify background script about tab connection
+    if (this.onTabConnected) {
+      this.onTabConnected(selectedTab.id);
+    }
+
+    // Store and notify about stealth mode
+    this._stealthMode = stealth;
+    debugLog('_selectTab: Setting stealth mode to:', stealth, 'callback exists:', !!this.onStealthModeSet);
+    console.error('[RelayConnection] _selectTab: stealth =', stealth, 'sending setStealthMode with params:', { stealthMode: stealth });
+
+    // Send stealth mode to CDP relay (for Playwright-level patches)
+    this._sendMessage({
+      method: 'setStealthMode',
+      params: { stealthMode: stealth }
+    });
+
+    if (this.onStealthModeSet) {
+      this.onStealthModeSet(stealth);
+    }
+
+    // Attach debugger immediately (no lazy attachment)
+    debugLog('Attaching debugger to tab:', this._debuggee);
+    await chrome.debugger.attach(this._debuggee, '1.3');
+    debugLog('Debugger attached successfully');
+
+    return {
+      success: true,
+      activated: activate,
+      tab: {
+        id: selectedTab.id,
+        title: selectedTab.title,
+        url: selectedTab.url,
+        index: tabIndex,
+      },
+    };
+  }
+
+  private async _createTab(url: string, activate: boolean = true, stealth: boolean = false): Promise<any> {
+    // Create a new tab
+    const newTab = await chrome.tabs.create({
+      url: url,
+      active: activate,
+    });
+
+    if (!newTab.id) {
+      throw new Error('Failed to create tab');
+    }
+
+    // Update the debuggee to attach to this new tab
+    this._debuggee = { tabId: newTab.id };
+
+    // Notify background script about tab connection
+    if (this.onTabConnected) {
+      this.onTabConnected(newTab.id);
+    }
+
+    // Store and notify about stealth mode
+    this._stealthMode = stealth;
+    debugLog('_createTab: Setting stealth mode to:', stealth, 'callback exists:', !!this.onStealthModeSet);
+    console.error('[RelayConnection] _createTab: stealth =', stealth, 'sending setStealthMode with params:', { stealthMode: stealth });
+
+    // Send stealth mode to CDP relay (for Playwright-level patches)
+    this._sendMessage({
+      method: 'setStealthMode',
+      params: { stealthMode: stealth }
+    });
+
+    if (this.onStealthModeSet) {
+      this.onStealthModeSet(stealth);
+    }
+
+    // Wait for tab to be ready, then attach debugger immediately
+    await new Promise(resolve => setTimeout(resolve, 100));
+    debugLog('Attaching debugger to new tab:', this._debuggee);
+    await chrome.debugger.attach(this._debuggee, '1.3');
+    debugLog('Debugger attached successfully');
+
+    return {
+      success: true,
+      activated: activate,
+      tab: {
+        id: newTab.id,
+        title: newTab.title,
+        // Return the requested URL, not newTab.url which might be about:blank initially
+        url: url
+      },
+    };
+  }
+
+  private async _activateTab(tabIndex: number): Promise<any> {
+    const allTabs = await chrome.tabs.query({});
+    const filteredTabs = allTabs.filter(tab =>
+      tab.url && !['chrome:', 'edge:', 'devtools:'].some(scheme => tab.url!.startsWith(scheme))
+    );
+
+    if (tabIndex < 0 || tabIndex >= filteredTabs.length) {
+      throw new Error(`Tab index ${tabIndex} out of range (0-${filteredTabs.length - 1})`);
+    }
+
+    const targetTab = filteredTabs[tabIndex];
+    if (!targetTab.id) {
+      throw new Error('Invalid tab ID');
+    }
+
+    // Activate the tab (bring to foreground)
+    await chrome.tabs.update(targetTab.id, { active: true });
+    await chrome.windows.update(targetTab.windowId!, { focused: true });
+
+    // Do NOT change the debuggee - just activate the tab visually
+    return {
+      success: true,
+      activated: true,
+      tab: {
+        id: targetTab.id,
+        title: targetTab.title,
+        url: targetTab.url,
+        index: tabIndex,
+      },
+    };
   }
 
   private _sendError(code: number, message: string): void {

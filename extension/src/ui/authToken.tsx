@@ -60,7 +60,7 @@ export const AuthTokenSection: React.FC<{}> = ({}) => {
         {isExampleExpanded && (
           <div className='auth-token-example-content'>
             <div className='auth-token-example-description'>
-              Add this configuration to your MCP client (e.g., VS Code) to connect to the Playwright MCP Bridge:
+              Add this configuration to your MCP client (e.g., VS Code) to connect to the Blueprint MCP for Chrome:
             </div>
             <div className='auth-token-example-config'>
               <code className='auth-token-example-code'>{exampleConfig(authToken)}</code>

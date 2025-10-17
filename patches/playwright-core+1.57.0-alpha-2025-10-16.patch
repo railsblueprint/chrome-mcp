@@ -1,0 +1,323 @@
+diff --git a/node_modules/playwright-core/lib/client/clientHelper.js b/node_modules/playwright-core/lib/client/clientHelper.js
+index fc215ee..60a6149 100644
+--- a/node_modules/playwright-core/lib/client/clientHelper.js
++++ b/node_modules/playwright-core/lib/client/clientHelper.js
+@@ -53,8 +53,11 @@ async function evaluationScript(platform, fun, arg, addSourceUrl = true) {
+   throw new Error("Either path or content property must be present");
+ }
+ function addSourceUrlToScript(source, path) {
++  // Stealth mode: use generic filename instead of revealing automation library path
++  const stealthMode = process.env.STEALTH_MODE === 'true';
++  const sourceUrl = stealthMode ? 'app.js' : path.replace(/\n/g, "");
+   return `${source}
+-//# sourceURL=${path.replace(/\n/g, "")}`;
++//# sourceURL=${sourceUrl}`;
+ }
+ // Annotate the CommonJS export names for ESM import in node:
+ 0 && (module.exports = {
+diff --git a/node_modules/playwright-core/lib/client/frame.js b/node_modules/playwright-core/lib/client/frame.js
+index 3ae21e4..cc70045 100644
+--- a/node_modules/playwright-core/lib/client/frame.js
++++ b/node_modules/playwright-core/lib/client/frame.js
+@@ -168,12 +168,24 @@ class Frame extends import_channelOwner.ChannelOwner {
+   }
+   async evaluateHandle(pageFunction, arg) {
+     (0, import_jsHandle.assertMaxArguments)(arguments.length, 2);
+-    const result = await this._channel.evaluateExpressionHandle({ expression: String(pageFunction), isFunction: typeof pageFunction === "function", arg: (0, import_jsHandle.serializeArgument)(arg) });
++    const params = { expression: String(pageFunction), isFunction: typeof pageFunction === "function", arg: (0, import_jsHandle.serializeArgument)(arg) };
++    if (process.env.STEALTH_MODE === 'true') {
++      params.world = 'utility';
++    }
++    const result = await this._channel.evaluateExpressionHandle(params);
+     return import_jsHandle.JSHandle.from(result.handle);
+   }
+   async evaluate(pageFunction, arg) {
+     (0, import_jsHandle.assertMaxArguments)(arguments.length, 2);
+-    const result = await this._channel.evaluateExpression({ expression: String(pageFunction), isFunction: typeof pageFunction === "function", arg: (0, import_jsHandle.serializeArgument)(arg) });
++    const params = { expression: String(pageFunction), isFunction: typeof pageFunction === "function", arg: (0, import_jsHandle.serializeArgument)(arg) };
++    if (process.env.STEALTH_MODE === 'true') {
++      console.error('[frame.js evaluate] STEALTH_MODE is true, setting world to utility');
++      params.world = 'utility';
++    } else {
++      console.error('[frame.js evaluate] STEALTH_MODE:', process.env.STEALTH_MODE);
++    }
++    console.error('[frame.js evaluate] params.world:', params.world);
++    const result = await this._channel.evaluateExpression(params);
+     return (0, import_jsHandle.parseResult)(result.value);
+   }
+   async _evaluateFunction(functionDeclaration) {
+@@ -182,7 +194,11 @@ class Frame extends import_channelOwner.ChannelOwner {
+   }
+   async _evaluateExposeUtilityScript(pageFunction, arg) {
+     (0, import_jsHandle.assertMaxArguments)(arguments.length, 2);
+-    const result = await this._channel.evaluateExpression({ expression: String(pageFunction), isFunction: typeof pageFunction === "function", arg: (0, import_jsHandle.serializeArgument)(arg) });
++    // Stealth mode: use utility world instead of main world
++    const stealthMode = process.env.STEALTH_MODE === 'true';
++    const params = { expression: String(pageFunction), isFunction: typeof pageFunction === "function", arg: (0, import_jsHandle.serializeArgument)(arg) };
++    if (stealthMode) params.world = 'utility';
++    const result = await this._channel.evaluateExpression(params);
+     return (0, import_jsHandle.parseResult)(result.value);
+   }
+   async $(selector, options) {
+diff --git a/node_modules/playwright-core/lib/generated/utilityScriptSource.js b/node_modules/playwright-core/lib/generated/utilityScriptSource.js
+index 57c9a3d..47526e6 100644
+--- a/node_modules/playwright-core/lib/generated/utilityScriptSource.js
++++ b/node_modules/playwright-core/lib/generated/utilityScriptSource.js
+@@ -17,12 +17,23 @@ var __copyProps = (to, from, except, desc) => {
+ };
+ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+ var utilityScriptSource_exports = {};
+-__export(utilityScriptSource_exports, {
+-  source: () => source
++Object.defineProperty(utilityScriptSource_exports, 'source', {
++  get: getSource,
++  enumerable: true
+ });
+ module.exports = __toCommonJS(utilityScriptSource_exports);
+-const source = '\nvar __commonJS = obj => {\n  let required = false;\n  let result;\n  return function __require() {\n    if (!required) {\n      required = true;\n      let fn;\n      for (const name in obj) { fn = obj[name]; break; }\n      const module = { exports: {} };\n      fn(module.exports, module);\n      result = module.exports;\n    }\n    return result;\n  }\n};\nvar __export = (target, all) => {for (var name in all) target[name] = all[name];};\nvar __toESM = mod => ({ ...mod, \'default\': mod });\nvar __toCommonJS = mod => ({ ...mod, __esModule: true });\n\n\n// packages/injected/src/utilityScript.ts\nvar utilityScript_exports = {};\n__export(utilityScript_exports, {\n  UtilityScript: () => UtilityScript\n});\nmodule.exports = __toCommonJS(utilityScript_exports);\n\n// packages/playwright-core/src/utils/isomorphic/utilityScriptSerializers.ts\nfunction isRegExp(obj) {\n  try {\n    return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";\n  } catch (error) {\n    return false;\n  }\n}\nfunction isDate(obj) {\n  try {\n    return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";\n  } catch (error) {\n    return false;\n  }\n}\nfunction isURL(obj) {\n  try {\n    return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";\n  } catch (error) {\n    return false;\n  }\n}\nfunction isError(obj) {\n  var _a;\n  try {\n    return obj instanceof Error || obj && ((_a = Object.getPrototypeOf(obj)) == null ? void 0 : _a.name) === "Error";\n  } catch (error) {\n    return false;\n  }\n}\nfunction isTypedArray(obj, constructor) {\n  try {\n    return obj instanceof constructor || Object.prototype.toString.call(obj) === `[object ${constructor.name}]`;\n  } catch (error) {\n    return false;\n  }\n}\nvar typedArrayConstructors = {\n  i8: Int8Array,\n  ui8: Uint8Array,\n  ui8c: Uint8ClampedArray,\n  i16: Int16Array,\n  ui16: Uint16Array,\n  i32: Int32Array,\n  ui32: Uint32Array,\n  // TODO: add Float16Array once it\'s in baseline\n  f32: Float32Array,\n  f64: Float64Array,\n  bi64: BigInt64Array,\n  bui64: BigUint64Array\n};\nfunction typedArrayToBase64(array) {\n  if ("toBase64" in array)\n    return array.toBase64();\n  const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).map((b) => String.fromCharCode(b)).join("");\n  return btoa(binary);\n}\nfunction base64ToTypedArray(base64, TypedArrayConstructor) {\n  const binary = atob(base64);\n  const bytes = new Uint8Array(binary.length);\n  for (let i = 0; i < binary.length; i++)\n    bytes[i] = binary.charCodeAt(i);\n  return new TypedArrayConstructor(bytes.buffer);\n}\nfunction parseEvaluationResultValue(value, handles = [], refs = /* @__PURE__ */ new Map()) {\n  if (Object.is(value, void 0))\n    return void 0;\n  if (typeof value === "object" && value) {\n    if ("ref" in value)\n      return refs.get(value.ref);\n    if ("v" in value) {\n      if (value.v === "undefined")\n        return void 0;\n      if (value.v === "null")\n        return null;\n      if (value.v === "NaN")\n        return NaN;\n      if (value.v === "Infinity")\n        return Infinity;\n      if (value.v === "-Infinity")\n        return -Infinity;\n      if (value.v === "-0")\n        return -0;\n      return void 0;\n    }\n    if ("d" in value) {\n      return new Date(value.d);\n    }\n    if ("u" in value)\n      return new URL(value.u);\n    if ("bi" in value)\n      return BigInt(value.bi);\n    if ("e" in value) {\n      const error = new Error(value.e.m);\n      error.name = value.e.n;\n      error.stack = value.e.s;\n      return error;\n    }\n    if ("r" in value)\n      return new RegExp(value.r.p, value.r.f);\n    if ("a" in value) {\n      const result = [];\n      refs.set(value.id, result);\n      for (const a of value.a)\n        result.push(parseEvaluationResultValue(a, handles, refs));\n      return result;\n    }\n    if ("o" in value) {\n      const result = {};\n      refs.set(value.id, result);\n      for (const { k, v } of value.o) {\n        if (k === "__proto__")\n          continue;\n        result[k] = parseEvaluationResultValue(v, handles, refs);\n      }\n      return result;\n    }\n    if ("h" in value)\n      return handles[value.h];\n    if ("ta" in value)\n      return base64ToTypedArray(value.ta.b, typedArrayConstructors[value.ta.k]);\n  }\n  return value;\n}\nfunction serializeAsCallArgument(value, handleSerializer) {\n  return serialize(value, handleSerializer, { visited: /* @__PURE__ */ new Map(), lastId: 0 });\n}\nfunction serialize(value, handleSerializer, visitorInfo) {\n  if (value && typeof value === "object") {\n    if (typeof globalThis.Window === "function" && value instanceof globalThis.Window)\n      return "ref: <Window>";\n    if (typeof globalThis.Document === "function" && value instanceof globalThis.Document)\n      return "ref: <Document>";\n    if (typeof globalThis.Node === "function" && value instanceof globalThis.Node)\n      return "ref: <Node>";\n  }\n  return innerSerialize(value, handleSerializer, visitorInfo);\n}\nfunction innerSerialize(value, handleSerializer, visitorInfo) {\n  var _a;\n  const result = handleSerializer(value);\n  if ("fallThrough" in result)\n    value = result.fallThrough;\n  else\n    return result;\n  if (typeof value === "symbol")\n    return { v: "undefined" };\n  if (Object.is(value, void 0))\n    return { v: "undefined" };\n  if (Object.is(value, null))\n    return { v: "null" };\n  if (Object.is(value, NaN))\n    return { v: "NaN" };\n  if (Object.is(value, Infinity))\n    return { v: "Infinity" };\n  if (Object.is(value, -Infinity))\n    return { v: "-Infinity" };\n  if (Object.is(value, -0))\n    return { v: "-0" };\n  if (typeof value === "boolean")\n    return value;\n  if (typeof value === "number")\n    return value;\n  if (typeof value === "string")\n    return value;\n  if (typeof value === "bigint")\n    return { bi: value.toString() };\n  if (isError(value)) {\n    let stack;\n    if ((_a = value.stack) == null ? void 0 : _a.startsWith(value.name + ": " + value.message)) {\n      stack = value.stack;\n    } else {\n      stack = `${value.name}: ${value.message}\n${value.stack}`;\n    }\n    return { e: { n: value.name, m: value.message, s: stack } };\n  }\n  if (isDate(value))\n    return { d: value.toJSON() };\n  if (isURL(value))\n    return { u: value.toJSON() };\n  if (isRegExp(value))\n    return { r: { p: value.source, f: value.flags } };\n  for (const [k, ctor] of Object.entries(typedArrayConstructors)) {\n    if (isTypedArray(value, ctor))\n      return { ta: { b: typedArrayToBase64(value), k } };\n  }\n  const id = visitorInfo.visited.get(value);\n  if (id)\n    return { ref: id };\n  if (Array.isArray(value)) {\n    const a = [];\n    const id2 = ++visitorInfo.lastId;\n    visitorInfo.visited.set(value, id2);\n    for (let i = 0; i < value.length; ++i)\n      a.push(serialize(value[i], handleSerializer, visitorInfo));\n    return { a, id: id2 };\n  }\n  if (typeof value === "object") {\n    const o = [];\n    const id2 = ++visitorInfo.lastId;\n    visitorInfo.visited.set(value, id2);\n    for (const name of Object.keys(value)) {\n      let item;\n      try {\n        item = value[name];\n      } catch (e) {\n        continue;\n      }\n      if (name === "toJSON" && typeof item === "function")\n        o.push({ k: name, v: { o: [], id: 0 } });\n      else\n        o.push({ k: name, v: serialize(item, handleSerializer, visitorInfo) });\n    }\n    let jsonWrapper;\n    try {\n      if (o.length === 0 && value.toJSON && typeof value.toJSON === "function")\n        jsonWrapper = { value: value.toJSON() };\n    } catch (e) {\n    }\n    if (jsonWrapper)\n      return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);\n    return { o, id: id2 };\n  }\n}\n\n// packages/injected/src/utilityScript.ts\nvar UtilityScript = class {\n  constructor(global, isUnderTest) {\n    var _a, _b, _c, _d, _e, _f, _g, _h;\n    this.global = global;\n    this.isUnderTest = isUnderTest;\n    if (global.__pwClock) {\n      this.builtins = global.__pwClock.builtins;\n    } else {\n      this.builtins = {\n        setTimeout: (_a = global.setTimeout) == null ? void 0 : _a.bind(global),\n        clearTimeout: (_b = global.clearTimeout) == null ? void 0 : _b.bind(global),\n        setInterval: (_c = global.setInterval) == null ? void 0 : _c.bind(global),\n        clearInterval: (_d = global.clearInterval) == null ? void 0 : _d.bind(global),\n        requestAnimationFrame: (_e = global.requestAnimationFrame) == null ? void 0 : _e.bind(global),\n        cancelAnimationFrame: (_f = global.cancelAnimationFrame) == null ? void 0 : _f.bind(global),\n        requestIdleCallback: (_g = global.requestIdleCallback) == null ? void 0 : _g.bind(global),\n        cancelIdleCallback: (_h = global.cancelIdleCallback) == null ? void 0 : _h.bind(global),\n        performance: global.performance,\n        Intl: global.Intl,\n        Date: global.Date\n      };\n    }\n    if (this.isUnderTest)\n      global.builtins = this.builtins;\n  }\n  evaluate(isFunction, returnByValue, expression, argCount, ...argsAndHandles) {\n    const args = argsAndHandles.slice(0, argCount);\n    const handles = argsAndHandles.slice(argCount);\n    const parameters = [];\n    for (let i = 0; i < args.length; i++)\n      parameters[i] = parseEvaluationResultValue(args[i], handles);\n    let result = this.global.eval(expression);\n    if (isFunction === true) {\n      result = result(...parameters);\n    } else if (isFunction === false) {\n      result = result;\n    } else {\n      if (typeof result === "function")\n        result = result(...parameters);\n    }\n    return returnByValue ? this._promiseAwareJsonValueNoThrow(result) : result;\n  }\n  jsonValue(returnByValue, value) {\n    if (value === void 0)\n      return void 0;\n    return serializeAsCallArgument(value, (value2) => ({ fallThrough: value2 }));\n  }\n  _promiseAwareJsonValueNoThrow(value) {\n    const safeJson = (value2) => {\n      try {\n        return this.jsonValue(true, value2);\n      } catch (e) {\n        return void 0;\n      }\n    };\n    if (value && typeof value === "object" && typeof value.then === "function") {\n      return (async () => {\n        const promiseValue = await value;\n        return safeJson(promiseValue);\n      })();\n    }\n    return safeJson(value);\n  }\n};\n';
++const _originalSource = '\nvar __commonJS = obj => {\n  let required = false;\n  let result;\n  return function __require() {\n    if (!required) {\n      required = true;\n      let fn;\n      for (const name in obj) { fn = obj[name]; break; }\n      const module = { exports: {} };\n      fn(module.exports, module);\n      result = module.exports;\n    }\n    return result;\n  }\n};\nvar __export = (target, all) => {for (var name in all) target[name] = all[name];};\nvar __toESM = mod => ({ ...mod, \'default\': mod });\nvar __toCommonJS = mod => ({ ...mod, __esModule: true });\n\n\n// packages/injected/src/utilityScript.ts\nvar utilityScript_exports = {};\n__export(utilityScript_exports, {\n  UtilityScript: () => UtilityScript\n});\nmodule.exports = __toCommonJS(utilityScript_exports);\n\n// packages/playwright-core/src/utils/isomorphic/utilityScriptSerializers.ts\nfunction isRegExp(obj) {\n  try {\n    return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";\n  } catch (error) {\n    return false;\n  }\n}\nfunction isDate(obj) {\n  try {\n    return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";\n  } catch (error) {\n    return false;\n  }\n}\nfunction isURL(obj) {\n  try {\n    return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";\n  } catch (error) {\n    return false;\n  }\n}\nfunction isError(obj) {\n  var _a;\n  try {\n    return obj instanceof Error || obj && ((_a = Object.getPrototypeOf(obj)) == null ? void 0 : _a.name) === "Error";\n  } catch (error) {\n    return false;\n  }\n}\nfunction isTypedArray(obj, constructor) {\n  try {\n    return obj instanceof constructor || Object.prototype.toString.call(obj) === `[object ${constructor.name}]`;\n  } catch (error) {\n    return false;\n  }\n}\nvar typedArrayConstructors = {\n  i8: Int8Array,\n  ui8: Uint8Array,\n  ui8c: Uint8ClampedArray,\n  i16: Int16Array,\n  ui16: Uint16Array,\n  i32: Int32Array,\n  ui32: Uint32Array,\n  // TODO: add Float16Array once it\'s in baseline\n  f32: Float32Array,\n  f64: Float64Array,\n  bi64: BigInt64Array,\n  bui64: BigUint64Array\n};\nfunction typedArrayToBase64(array) {\n  if ("toBase64" in array)\n    return array.toBase64();\n  const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).map((b) => String.fromCharCode(b)).join("");\n  return btoa(binary);\n}\nfunction base64ToTypedArray(base64, TypedArrayConstructor) {\n  const binary = atob(base64);\n  const bytes = new Uint8Array(binary.length);\n  for (let i = 0; i < binary.length; i++)\n    bytes[i] = binary.charCodeAt(i);\n  return new TypedArrayConstructor(bytes.buffer);\n}\nfunction parseEvaluationResultValue(value, handles = [], refs = /* @__PURE__ */ new Map()) {\n  if (Object.is(value, void 0))\n    return void 0;\n  if (typeof value === "object" && value) {\n    if ("ref" in value)\n      return refs.get(value.ref);\n    if ("v" in value) {\n      if (value.v === "undefined")\n        return void 0;\n      if (value.v === "null")\n        return null;\n      if (value.v === "NaN")\n        return NaN;\n      if (value.v === "Infinity")\n        return Infinity;\n      if (value.v === "-Infinity")\n        return -Infinity;\n      if (value.v === "-0")\n        return -0;\n      return void 0;\n    }\n    if ("d" in value) {\n      return new Date(value.d);\n    }\n    if ("u" in value)\n      return new URL(value.u);\n    if ("bi" in value)\n      return BigInt(value.bi);\n    if ("e" in value) {\n      const error = new Error(value.e.m);\n      error.name = value.e.n;\n      error.stack = value.e.s;\n      return error;\n    }\n    if ("r" in value)\n      return new RegExp(value.r.p, value.r.f);\n    if ("a" in value) {\n      const result = [];\n      refs.set(value.id, result);\n      for (const a of value.a)\n        result.push(parseEvaluationResultValue(a, handles, refs));\n      return result;\n    }\n    if ("o" in value) {\n      const result = {};\n      refs.set(value.id, result);\n      for (const { k, v } of value.o) {\n        if (k === "__proto__")\n          continue;\n        result[k] = parseEvaluationResultValue(v, handles, refs);\n      }\n      return result;\n    }\n    if ("h" in value)\n      return handles[value.h];\n    if ("ta" in value)\n      return base64ToTypedArray(value.ta.b, typedArrayConstructors[value.ta.k]);\n  }\n  return value;\n}\nfunction serializeAsCallArgument(value, handleSerializer) {\n  return serialize(value, handleSerializer, { visited: /* @__PURE__ */ new Map(), lastId: 0 });\n}\nfunction serialize(value, handleSerializer, visitorInfo) {\n  if (value && typeof value === "object") {\n    if (typeof globalThis.Window === "function" && value instanceof globalThis.Window)\n      return "ref: <Window>";\n    if (typeof globalThis.Document === "function" && value instanceof globalThis.Document)\n      return "ref: <Document>";\n    if (typeof globalThis.Node === "function" && value instanceof globalThis.Node)\n      return "ref: <Node>";\n  }\n  return innerSerialize(value, handleSerializer, visitorInfo);\n}\nfunction innerSerialize(value, handleSerializer, visitorInfo) {\n  var _a;\n  const result = handleSerializer(value);\n  if ("fallThrough" in result)\n    value = result.fallThrough;\n  else\n    return result;\n  if (typeof value === "symbol")\n    return { v: "undefined" };\n  if (Object.is(value, void 0))\n    return { v: "undefined" };\n  if (Object.is(value, null))\n    return { v: "null" };\n  if (Object.is(value, NaN))\n    return { v: "NaN" };\n  if (Object.is(value, Infinity))\n    return { v: "Infinity" };\n  if (Object.is(value, -Infinity))\n    return { v: "-Infinity" };\n  if (Object.is(value, -0))\n    return { v: "-0" };\n  if (typeof value === "boolean")\n    return value;\n  if (typeof value === "number")\n    return value;\n  if (typeof value === "string")\n    return value;\n  if (typeof value === "bigint")\n    return { bi: value.toString() };\n  if (isError(value)) {\n    let stack;\n    if ((_a = value.stack) == null ? void 0 : _a.startsWith(value.name + ": " + value.message)) {\n      stack = value.stack;\n    } else {\n      stack = `${value.name}: ${value.message}\n${value.stack}`;\n    }\n    return { e: { n: value.name, m: value.message, s: stack } };\n  }\n  if (isDate(value))\n    return { d: value.toJSON() };\n  if (isURL(value))\n    return { u: value.toJSON() };\n  if (isRegExp(value))\n    return { r: { p: value.source, f: value.flags } };\n  for (const [k, ctor] of Object.entries(typedArrayConstructors)) {\n    if (isTypedArray(value, ctor))\n      return { ta: { b: typedArrayToBase64(value), k } };\n  }\n  const id = visitorInfo.visited.get(value);\n  if (id)\n    return { ref: id };\n  if (Array.isArray(value)) {\n    const a = [];\n    const id2 = ++visitorInfo.lastId;\n    visitorInfo.visited.set(value, id2);\n    for (let i = 0; i < value.length; ++i)\n      a.push(serialize(value[i], handleSerializer, visitorInfo));\n    return { a, id: id2 };\n  }\n  if (typeof value === "object") {\n    const o = [];\n    const id2 = ++visitorInfo.lastId;\n    visitorInfo.visited.set(value, id2);\n    for (const name of Object.keys(value)) {\n      let item;\n      try {\n        item = value[name];\n      } catch (e) {\n        continue;\n      }\n      if (name === "toJSON" && typeof item === "function")\n        o.push({ k: name, v: { o: [], id: 0 } });\n      else\n        o.push({ k: name, v: serialize(item, handleSerializer, visitorInfo) });\n    }\n    let jsonWrapper;\n    try {\n      if (o.length === 0 && value.toJSON && typeof value.toJSON === "function")\n        jsonWrapper = { value: value.toJSON() };\n    } catch (e) {\n    }\n    if (jsonWrapper)\n      return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);\n    return { o, id: id2 };\n  }\n}\n\n// packages/injected/src/utilityScript.ts\nvar UtilityScript = class {\n  constructor(global, isUnderTest) {\n    var _a, _b, _c, _d, _e, _f, _g, _h;\n    this.global = global;\n    this.isUnderTest = isUnderTest;\n    if (global.__pwClock) {\n      this.builtins = global.__pwClock.builtins;\n    } else {\n      this.builtins = {\n        setTimeout: (_a = global.setTimeout) == null ? void 0 : _a.bind(global),\n        clearTimeout: (_b = global.clearTimeout) == null ? void 0 : _b.bind(global),\n        setInterval: (_c = global.setInterval) == null ? void 0 : _c.bind(global),\n        clearInterval: (_d = global.clearInterval) == null ? void 0 : _d.bind(global),\n        requestAnimationFrame: (_e = global.requestAnimationFrame) == null ? void 0 : _e.bind(global),\n        cancelAnimationFrame: (_f = global.cancelAnimationFrame) == null ? void 0 : _f.bind(global),\n        requestIdleCallback: (_g = global.requestIdleCallback) == null ? void 0 : _g.bind(global),\n        cancelIdleCallback: (_h = global.cancelIdleCallback) == null ? void 0 : _h.bind(global),\n        performance: global.performance,\n        Intl: global.Intl,\n        Date: global.Date\n      };\n    }\n    if (this.isUnderTest)\n      global.builtins = this.builtins;\n  }\n  evaluate(isFunction, returnByValue, expression, argCount, ...argsAndHandles) {\n    const args = argsAndHandles.slice(0, argCount);\n    const handles = argsAndHandles.slice(argCount);\n    const parameters = [];\n    for (let i = 0; i < args.length; i++)\n      parameters[i] = parseEvaluationResultValue(args[i], handles);\n    let result = this.global.eval(expression);\n    if (isFunction === true) {\n      result = result(...parameters);\n    } else if (isFunction === false) {\n      result = result;\n    } else {\n      if (typeof result === "function")\n        result = result(...parameters);\n    }\n    return returnByValue ? this._promiseAwareJsonValueNoThrow(result) : result;\n  }\n  jsonValue(returnByValue, value) {\n    if (value === void 0)\n      return void 0;\n    return serializeAsCallArgument(value, (value2) => ({ fallThrough: value2 }));\n  }\n  _promiseAwareJsonValueNoThrow(value) {\n    const safeJson = (value2) => {\n      try {\n        return this.jsonValue(true, value2);\n      } catch (e) {\n        return void 0;\n      }\n    };\n    if (value && typeof value === "object" && typeof value.then === "function") {\n      return (async () => {\n        const promiseValue = await value;\n        return safeJson(promiseValue);\n      })();\n    }\n    return safeJson(value);\n  }\n};\n';
++function getSource() {
++  if (process.env.STEALTH_MODE === 'true') {
++    // Rename class from UtilityScript to Util, keep export working
++    return _originalSource
++      .replace(/var UtilityScript = class \{/g, 'var Util = class {')
++      .replace(/UtilityScript: \(\) => UtilityScript\n\}\);/g, 'UtilityScript: () => Util\n});\nvar UtilityScript = Util;');
++  }
++  return _originalSource;
++}
+ // Annotate the CommonJS export names for ESM import in node:
+ 0 && (module.exports = {
+   source
+ });
++
+diff --git a/node_modules/playwright-core/lib/server/chromium/crConnection.js b/node_modules/playwright-core/lib/server/chromium/crConnection.js
+index 4e86fa0..77be160 100644
+--- a/node_modules/playwright-core/lib/server/chromium/crConnection.js
++++ b/node_modules/playwright-core/lib/server/chromium/crConnection.js
+@@ -159,6 +159,109 @@ class CRSession extends import_instrumentation.SdkObject {
+     }
+     this._callbacks.clear();
+   }
++  async __re__emitExecutionContext({
++    world,
++    targetId,
++    frame = null
++  }) {
++    const utilityWorldName = process.env.STEALTH_MODE === 'true' ? 'util' : '__playwright_utility_world__';
++    console.error(`[rebrowser-patches][crSession] targetId = ${targetId}, world = ${world}, frame = ${frame ? "Y" : "N"}`);
++    let getWorldPromise;
++    if (world === "utility") {
++      getWorldPromise = this.__re__getIsolatedWorld({
++        client: this,
++        frameId: targetId,
++        worldName: utilityWorldName
++      }).then((contextId) => {
++        return {
++          id: contextId,
++          // use UTILITY_WORLD_NAME value from crPage.ts otherwise _onExecutionContextCreated will ignore it
++          name: "__playwright_utility_world__",
++          auxData: {
++            frameId: targetId,
++            isDefault: false
++          }
++        };
++      });
++    } else if (world === "main") {
++      getWorldPromise = this.__re__getMainWorld({
++        client: this,
++        frameId: targetId,
++        isWorker: frame === null
++      }).then((contextId) => {
++        return {
++          id: contextId,
++          name: "",
++          auxData: {
++            frameId: targetId,
++            isDefault: true
++          }
++        };
++      });
++    }
++    const contextPayload = await getWorldPromise;
++    this.emit("Runtime.executionContextCreated", {
++      context: contextPayload
++    });
++  }
++  async __re__getMainWorld({ client, frameId, isWorker = false }) {
++    let contextId;
++    const randomName = [...Array(Math.floor(Math.random() * (10 + 1)) + 10)].map(() => Math.random().toString(36)[2]).join("");
++    console.error(`[rebrowser-patches][getMainWorld] binding name = ${randomName}`);
++    await client.send("Runtime.addBinding", {
++      name: randomName
++    });
++    const bindingCalledHandler = ({ name, payload, executionContextId }) => {
++      console.error("[rebrowser-patches][bindingCalledHandler]", {
++        name,
++        payload,
++        executionContextId
++      });
++      if (contextId > 0) {
++        return;
++      }
++      if (name !== randomName) {
++        return;
++      }
++      if (payload !== frameId) {
++        return;
++      }
++      contextId = executionContextId;
++      client.off("Runtime.bindingCalled", bindingCalledHandler);
++    };
++    client.on("Runtime.bindingCalled", bindingCalledHandler);
++    if (isWorker) {
++      await client.send("Runtime.evaluate", {
++        expression: `this['${randomName}']('${frameId}')`
++      });
++    } else {
++      await client.send("Page.addScriptToEvaluateOnNewDocument", {
++        source: `document.addEventListener('${randomName}', (e) => self['${randomName}'](e.detail.frameId))`,
++        runImmediately: true
++      });
++      const createIsolatedWorldResult = await client.send("Page.createIsolatedWorld", {
++        frameId,
++        // use randomName for worldName to distinguish from normal utility world
++        worldName: randomName,
++        grantUniveralAccess: true
++      });
++      await client.send("Runtime.evaluate", {
++        expression: `document.dispatchEvent(new CustomEvent('${randomName}', { detail: { frameId: '${frameId}' } }))`,
++        contextId: createIsolatedWorldResult.executionContextId
++      });
++    }
++    console.error(`[rebrowser-patches][getMainWorld] result:`, { contextId });
++    return contextId;
++  }
++  async __re__getIsolatedWorld({ client, frameId, worldName }) {
++    const createIsolatedWorldResult = await client.send("Page.createIsolatedWorld", {
++      frameId,
++      worldName,
++      grantUniveralAccess: true
++    });
++    console.error(`[rebrowser-patches][getIsolatedWorld] result:`, createIsolatedWorldResult);
++    return createIsolatedWorldResult.executionContextId;
++  }
+ }
+ class CDPSession extends import_instrumentation.SdkObject {
+   constructor(parentSession, sessionId) {
+diff --git a/node_modules/playwright-core/lib/server/chromium/crDevTools.js b/node_modules/playwright-core/lib/server/chromium/crDevTools.js
+index 41278ea..0b518ef 100644
+--- a/node_modules/playwright-core/lib/server/chromium/crDevTools.js
++++ b/node_modules/playwright-core/lib/server/chromium/crDevTools.js
+@@ -72,7 +72,7 @@ class CRDevTools {
+       }).catch((e) => null);
+     });
+     Promise.all([
+-      session.send("Runtime.enable"),
++      session.send("Runtime.enable", {}),
+       session.send("Runtime.addBinding", { name: kBindingName }),
+       session.send("Page.enable"),
+       session.send("Page.addScriptToEvaluateOnNewDocument", { source: `
+diff --git a/node_modules/playwright-core/lib/server/chromium/crPage.js b/node_modules/playwright-core/lib/server/chromium/crPage.js
+index 0de7e8c..fd8831d 100644
+--- a/node_modules/playwright-core/lib/server/chromium/crPage.js
++++ b/node_modules/playwright-core/lib/server/chromium/crPage.js
+@@ -74,7 +74,11 @@ class CRPage {
+     this._coverage = new import_crCoverage.CRCoverage(client);
+     this._browserContext = browserContext;
+     this._page = new import_page.Page(this, browserContext);
+-    this.utilityWorldName = `__playwright_utility_world_${this._page.guid}`;
++    // Stealth mode: use generic name instead of revealing Playwright
++    const stealthMode = process.env.STEALTH_MODE === 'true';
++    console.error(`[crPage] Constructor called, STEALTH_MODE=${process.env.STEALTH_MODE}, stealthMode=${stealthMode}`);
++    this.utilityWorldName = stealthMode ? 'util' : `__playwright_utility_world_${this._page.guid}`;
++    console.error(`[crPage] utilityWorldName set to: ${this.utilityWorldName}`);
+     this._networkManager = new import_crNetworkManager.CRNetworkManager(this._page, null);
+     this.updateOffline();
+     this.updateExtraHTTPHeaders();
+@@ -568,6 +572,18 @@ class FrameSession {
+       worldName = "main";
+     else if (contextPayload.name === this._crPage.utilityWorldName)
+       worldName = "utility";
++
++    // Debug logging to understand context creation
++    if (process.env.STEALTH_MODE === 'true') {
++      console.error('[crPage] Context created:', {
++        id: contextPayload.id,
++        name: contextPayload.name,
++        isDefault: contextPayload.auxData?.isDefault,
++        worldName,
++        utilityWorldName: this._crPage.utilityWorldName
++      });
++    }
++
+     const context = new dom.FrameExecutionContext(delegate, frame, worldName);
+     if (worldName)
+       frame._contextCreated(worldName, context);
+@@ -620,7 +636,9 @@ class FrameSession {
+     session.once("Runtime.executionContextCreated", async (event2) => {
+       worker.createExecutionContext(new import_crExecutionContext.CRExecutionContext(session, event2.context));
+     });
+-    session._sendMayFail("Runtime.enable");
++    if (process.env.STEALTH_MODE !== 'true') {
++      session._sendMayFail("Runtime.enable");
++    }
+     this._crPage._networkManager.addSession(session, this._page.frameManager.frame(this._targetId) ?? void 0).catch(() => {
+     });
+     session._sendMayFail("Runtime.runIfWaitingForDebugger");
+diff --git a/node_modules/playwright-core/lib/server/dispatchers/frameDispatcher.js b/node_modules/playwright-core/lib/server/dispatchers/frameDispatcher.js
+index 455bee0..6347b2a 100644
+--- a/node_modules/playwright-core/lib/server/dispatchers/frameDispatcher.js
++++ b/node_modules/playwright-core/lib/server/dispatchers/frameDispatcher.js
+@@ -73,10 +73,21 @@ class FrameDispatcher extends import_dispatcher.Dispatcher {
+     return { element: import_elementHandlerDispatcher.ElementHandleDispatcher.from(this, await progress.race(this._frame.frameElement())) };
+   }
+   async evaluateExpression(params, progress) {
+-    return { value: (0, import_jsHandleDispatcher.serializeResult)(await progress.race(this._frame.evaluateExpression(params.expression, { isFunction: params.isFunction }, (0, import_jsHandleDispatcher.parseArgument)(params.arg)))) };
++    console.error('[frameDispatcher evaluateExpression] params.world:', params.world);
++    console.error('[frameDispatcher evaluateExpression] params keys:', Object.keys(params));
++    const options = { isFunction: params.isFunction };
++    if (params.world !== undefined) {
++      options.world = params.world;
++    }
++    console.error('[frameDispatcher evaluateExpression] options.world:', options.world);
++    return { value: (0, import_jsHandleDispatcher.serializeResult)(await progress.race(this._frame.evaluateExpression(params.expression, options, (0, import_jsHandleDispatcher.parseArgument)(params.arg)))) };
+   }
+   async evaluateExpressionHandle(params, progress) {
+-    return { handle: import_elementHandlerDispatcher.ElementHandleDispatcher.fromJSOrElementHandle(this, await progress.race(this._frame.evaluateExpressionHandle(params.expression, { isFunction: params.isFunction }, (0, import_jsHandleDispatcher.parseArgument)(params.arg)))) };
++    const options = { isFunction: params.isFunction };
++    if (params.world !== undefined) {
++      options.world = params.world;
++    }
++    return { handle: import_elementHandlerDispatcher.ElementHandleDispatcher.fromJSOrElementHandle(this, await progress.race(this._frame.evaluateExpressionHandle(params.expression, options, (0, import_jsHandleDispatcher.parseArgument)(params.arg)))) };
+   }
+   async waitForSelector(params, progress) {
+     return { element: import_elementHandlerDispatcher.ElementHandleDispatcher.fromNullable(this, await this._frame.waitForSelector(progress, params.selector, true, params)) };
+diff --git a/node_modules/playwright-core/lib/server/frames.js b/node_modules/playwright-core/lib/server/frames.js
+index d14c7e8..ede0701 100644
+--- a/node_modules/playwright-core/lib/server/frames.js
++++ b/node_modules/playwright-core/lib/server/frames.js
+@@ -589,12 +589,22 @@ class Frame extends import_instrumentation.SdkObject {
+     return this._context("utility");
+   }
+   async evaluateExpression(expression, options = {}, arg) {
+-    const context = await this._context(options.world ?? "main");
++    let world = options.world ?? "main";
++    if (process.env.STEALTH_MODE === 'true') {
++      console.error('[frames.js evaluateExpression] original world:', world);
++      world = 'utility';
++      console.error('[frames.js evaluateExpression] forcing world to:', world);
++    }
++    const context = await this._context(world);
+     const value = await context.evaluateExpression(expression, options, arg);
+     return value;
+   }
+   async evaluateExpressionHandle(expression, options = {}, arg) {
+-    const context = await this._context(options.world ?? "main");
++    let world = options.world ?? "main";
++    if (process.env.STEALTH_MODE === 'true') {
++      world = 'utility';
++    }
++    const context = await this._context(world);
+     const value = await context.evaluateExpressionHandle(expression, options, arg);
+     return value;
+   }

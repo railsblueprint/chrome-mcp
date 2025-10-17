@@ -1,7 +1,7 @@
 {
   "name": "@playwright/mcp",
   "version": "0.0.43",
-  "description": "Playwright Tools for MCP",
+  "description": "Blueprint MCP for Chrome - Browser automation for MCP",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/microsoft/playwright-mcp.git"
@@ -25,7 +25,8 @@
     "dtest": "MCP_IN_DOCKER=1 playwright test --project=chromium-docker",
     "npm-publish": "npm run clean && npm run test && npm publish",
     "copy-config": "cp ../playwright/packages/playwright/src/mcp/config.d.ts . && perl -pi -e \"s|import type \\* as playwright from 'playwright-core';|import type * as playwright from 'playwright';|\" ./config.d.ts",
-    "roll": "npm run copy-config && npm run lint"
+    "roll": "npm run copy-config && npm run lint",
+    "postinstall": "patch-package"
   },
   "exports": {
     "./package.json": "./package.json",
@@ -35,6 +36,7 @@
     }
   },
   "dependencies": {
+    "patchright": "^1.7.2",
     "playwright": "1.57.0-alpha-2025-10-16",
     "playwright-core": "1.57.0-alpha-2025-10-16"
   },
@@ -43,8 +45,9 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.17.5",
-    "@playwright/test": "1.57.0-alpha-2025-10-16",
+    "@playwright/test": "1.56.1",
     "@types/node": "^24.3.0",
+    "patch-package": "^8.0.1",
     "zod-to-json-schema": "^3.24.6"
   }
 }

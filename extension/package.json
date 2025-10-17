@@ -1,7 +1,7 @@
 {
-  "name": "@playwright/mcp-extension",
-  "version": "0.0.43",
-  "description": "Playwright MCP Browser Extension",
+  "name": "@blueprint/mcp-extension",
+  "version": "1.0.0",
+  "description": "Blueprint MCP for Chrome",
   "private": true,
   "repository": {
     "type": "git",
