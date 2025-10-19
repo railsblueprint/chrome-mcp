@@ -39,10 +39,31 @@ body {
   padding-bottom: 12px;
 }
 
+.popup-header {
+  position: relative;
+}
+
 .popup-header h1 {
   font-size: 16px;
   font-weight: 600;
   color: #1a1a1a;
+}
+
+.back-button {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: none;
+  border: none;
+  color: #1c75bc;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  font-weight: 500;
+}
+
+.back-button:hover {
+  color: #155a94;
 }
 
 .popup-content {
@@ -85,6 +106,27 @@ body {
   box-shadow: 0 0 4px rgba(244, 67, 54, 0.5);
 }
 
+.status-dot.connecting {
+  background-color: #ffa726;
+  box-shadow: 0 0 4px rgba(255, 167, 38, 0.5);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+  10% {
+    opacity: 0.3;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
 .status-text {
   font-size: 14px;
   font-weight: 500;
@@ -108,24 +150,162 @@ body {
 }
 
 .toggle-button.enabled {
+  background-color: white;
+  color: #1c75bc;
+  border: 2px solid #1c75bc;
+}
+
+.toggle-button.enabled:hover {
+  background-color: #f0f7fc;
+}
+
+.toggle-button.disabled {
+  background-color: #1c75bc;
+  color: white;
+  border: 2px solid #1c75bc;
+}
+
+.toggle-button.disabled:hover {
+  background-color: #155a94;
+  border-color: #155a94;
+}
+
+.toggle-button:active {
+  transform: scale(0.98);
+}
+
+.links-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #e0e0e0;
+  margin-top: 12px;
+}
+
+.settings-link,
+.doc-link,
+.beer-link {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.settings-link {
+  color: #666;
+  background-color: #f5f5f5;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.settings-link:hover {
+  background-color: #e8e8e8;
+  color: #333;
+}
+
+.doc-link {
+  color: #1c75bc;
+  background-color: #f0f7fc;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.doc-link:hover {
+  background-color: #e0f0fa;
+  color: #155a94;
+}
+
+.beer-link {
+  color: white;
+  background-color: #1c75bc;
+  font-weight: 700;
+  font-size: 16px;
+  padding: 14px 20px;
+  box-shadow: 0 3px 8px rgba(28, 117, 188, 0.4);
+}
+
+.beer-link:hover {
+  background-color: #155a94;
+  box-shadow: 0 4px 12px rgba(28, 117, 188, 0.5);
+  transform: translateY(-2px);
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+}
+
+.settings-input {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: monospace;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: #1c75bc;
+}
+
+.settings-help {
+  font-size: 12px;
+  color: #666;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.settings-button {
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.settings-button.save {
   background-color: #1c75bc;
   color: white;
 }
 
-.toggle-button.enabled:hover {
+.settings-button.save:hover {
   background-color: #155a94;
 }
 
-.toggle-button.disabled {
-  background-color: #f44336;
-  color: white;
+.settings-button.cancel {
+  background-color: #f5f5f5;
+  color: #666;
 }
 
-.toggle-button.disabled:hover {
-  background-color: #da190b;
+.settings-button.cancel:hover {
+  background-color: #e8e8e8;
 }
 
-.toggle-button:active {
+.settings-button:active {
   transform: scale(0.98);
 }
 

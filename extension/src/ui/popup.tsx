@@ -23,6 +23,9 @@ const Popup: React.FC = () => {
   const [currentTabConnected, setCurrentTabConnected] = useState<boolean>(false);
   const [stealthMode, setStealthMode] = useState<boolean | null>(null);
   const [anyConnected, setAnyConnected] = useState<boolean>(false);
+  const [connecting, setConnecting] = useState<boolean>(false);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [port, setPort] = useState<string>('5555');
 
   const updateStatus = async () => {
     // Get current tab
@@ -36,13 +39,20 @@ const Popup: React.FC = () => {
       setAnyConnected(response?.connected === true);
       setCurrentTabConnected(isCurrentTabConnected);
       setStealthMode(isCurrentTabConnected ? (response?.stealthMode ?? null) : null);
+
+      // Set connecting state: enabled but not connected
+      chrome.storage.local.get(['extensionEnabled'], (result) => {
+        const isEnabled = result.extensionEnabled !== false;
+        setConnecting(isEnabled && response?.connected !== true);
+      });
     });
   };
 
   useEffect(() => {
     // Load initial state
-    chrome.storage.local.get(['extensionEnabled'], (result) => {
+    chrome.storage.local.get(['extensionEnabled', 'mcpPort'], (result) => {
       setEnabled(result.extensionEnabled !== false); // Default to true
+      setPort(result.mcpPort || '5555'); // Default to 5555
     });
 
     // Get initial status
@@ -74,6 +84,61 @@ const Popup: React.FC = () => {
     await chrome.storage.local.set({ extensionEnabled: newEnabled });
   };
 
+  const saveSettings = async () => {
+    await chrome.storage.local.set({ mcpPort: port });
+    setShowSettings(false);
+    // Reload extension to apply new port
+    chrome.runtime.reload();
+  };
+
+  const cancelSettings = () => {
+    // Reload original port value
+    chrome.storage.local.get(['mcpPort'], (result) => {
+      setPort(result.mcpPort || '5555');
+    });
+    setShowSettings(false);
+  };
+
+  if (showSettings) {
+    return (
+      <div className="popup-container">
+        <div className="popup-header">
+          <button className="back-button" onClick={cancelSettings}>← Back</button>
+          <h1>Settings</h1>
+        </div>
+
+        <div className="popup-content">
+          <div className="settings-form">
+            <label className="settings-label">
+              MCP Server Port:
+              <input
+                type="number"
+                className="settings-input"
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+                min="1"
+                max="65535"
+                placeholder="5555"
+              />
+            </label>
+            <p className="settings-help">
+              Default: 5555. Change this if your MCP server runs on a different port.
+            </p>
+          </div>
+
+          <div className="settings-actions">
+            <button className="settings-button save" onClick={saveSettings}>
+              Save
+            </button>
+            <button className="settings-button cancel" onClick={cancelSettings}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="popup-container">
       <div className="popup-header">
@@ -84,8 +149,10 @@ const Popup: React.FC = () => {
         <div className="status-row">
           <span className="status-label">Status:</span>
           <div className="status-indicator">
-            <span className={`status-dot ${anyConnected ? 'connected' : 'disconnected'}`}></span>
-            <span className="status-text">{anyConnected ? 'Connected' : 'Disconnected'}</span>
+            <span className={`status-dot ${connecting ? 'connecting' : anyConnected ? 'connected' : 'disconnected'}`}></span>
+            <span className="status-text">
+              {connecting ? 'Connecting' : anyConnected ? 'Connected' : 'Disconnected'}
+            </span>
           </div>
         </div>
 
@@ -108,8 +175,33 @@ const Popup: React.FC = () => {
             className={`toggle-button ${enabled ? 'enabled' : 'disabled'}`}
             onClick={toggleEnabled}
           >
-            {enabled ? 'Enabled' : 'Disabled'}
+            {enabled ? 'Disable' : 'Enable'}
           </button>
+        </div>
+
+        <div className="links-section">
+          <button
+            className="settings-link"
+            onClick={() => setShowSettings(true)}
+          >
+            ⚙️ Settings
+          </button>
+          <a
+            href="http://mcp-for-chrome.railsblueprint.com/docs"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="doc-link"
+          >
+            📖 Documentation
+          </a>
+          <a
+            href="https://www.buymeacoffee.com/mcp.for.chrome"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="beer-link"
+          >
+            🍺 Buy me a beer
+          </a>
         </div>
       </div>
     </div>

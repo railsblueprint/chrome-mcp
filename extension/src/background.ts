@@ -48,6 +48,7 @@ class TabShareExtension {
     chrome.tabs.onUpdated.addListener(this._onTabUpdated.bind(this));
     chrome.tabs.onActivated.addListener(this._onTabActivated.bind(this));
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
+    chrome.storage.onChanged.addListener(this._onStorageChanged.bind(this));
 
     // Initialize extension as enabled by default
     chrome.storage.local.get(['extensionEnabled'], (result) => {
@@ -56,7 +57,11 @@ class TabShareExtension {
       }
     });
 
-    // Auto-connect to MCP server on startup
+    // FORCE GRAY ICON IMMEDIATELY
+    console.error('[Background] Constructor: forcing gray icon immediately');
+    this._updateGlobalIcon(false);
+
+    // Auto-connect to MCP server on startup (will set icon based on connection result)
     this._autoConnect();
   }
 
@@ -67,7 +72,15 @@ class TabShareExtension {
     }
 
     this._autoConnecting = true;
-    const mcpRelayUrl = 'ws://127.0.0.1:5555/extension';
+
+    // Get port from settings
+    const port = await new Promise<string>((resolve) => {
+      chrome.storage.local.get(['mcpPort'], (result) => {
+        resolve(result.mcpPort || '5555');
+      });
+    });
+
+    const mcpRelayUrl = `ws://127.0.0.1:${port}/extension`;
     debugLog('Auto-connecting to MCP server at ' + mcpRelayUrl);
     try {
       await this._connectToRelay(0, mcpRelayUrl);
@@ -75,9 +88,12 @@ class TabShareExtension {
       await this._connectTab(0, undefined, undefined, mcpRelayUrl);
       debugLog('Auto-connection successful');
       this._autoConnecting = false;
+      await this._updateGlobalIcon(true);
+      this._broadcastStatusChange();
     } catch (error: any) {
       debugLog('Auto-connection failed: ' + error.message);
       this._autoConnecting = false;
+      await this._updateGlobalIcon(false);
       // Retry after 1 second
       setTimeout(() => this._autoConnect(), 1000);
     }
@@ -203,6 +219,7 @@ class TabShareExtension {
       this._activeConnection.onTabConnected = (tabId: number) => {
         debugLog('Tab connected:', tabId);
         void this._setConnectedTabId(tabId);
+        void this._updateGlobalIcon(true);
         this._broadcastStatusChange();
       };
 
@@ -225,6 +242,7 @@ class TabShareExtension {
         this._activeConnection = undefined;
         this._stealthMode = null;
         void this._setConnectedTabId(null);
+        void this._updateGlobalIcon(false);
         this._broadcastStatusChange();
         // Auto-reconnect after connection loss
         setTimeout(() => this._autoConnect(), 1000);
@@ -263,6 +281,29 @@ class TabShareExtension {
         await chrome.action.setBadgeBackgroundColor({ tabId, color });
     } catch (error: any) {
       // Ignore errors as the tab may be closed already.
+    }
+  }
+
+  private async _updateGlobalIcon(connected: boolean): Promise<void> {
+    try {
+      console.error('[Background] _updateGlobalIcon called with connected:', connected);
+      const iconPath = connected ? {
+        "16": "/icons/icon-16.png",
+        "32": "/icons/icon-32.png",
+        "48": "/icons/icon-48.png",
+        "128": "/icons/icon-128.png"
+      } : {
+        "16": "/icons/icon-16-gray.png",
+        "32": "/icons/icon-32-gray.png",
+        "48": "/icons/icon-48-gray.png",
+        "128": "/icons/icon-128-gray.png"
+      };
+      console.error('[Background] Setting icon to:', connected ? 'COLOR' : 'GRAY');
+      await chrome.action.setIcon({ path: iconPath });
+      console.error('[Background] Icon updated successfully');
+    } catch (error: any) {
+      console.error('[Background] Failed to update icon:', error);
+      debugLog('Failed to update icon:', error.message);
     }
   }
 
@@ -317,6 +358,7 @@ class TabShareExtension {
     this._activeConnection = undefined;
     this._stealthMode = null; // Reset to N/A when disconnecting
     await this._setConnectedTabId(null);
+    await this._updateGlobalIcon(false);
     this._broadcastStatusChange();
   }
 
@@ -330,6 +372,21 @@ class TabShareExtension {
     }).catch(() => {
       // Ignore errors if no listeners (popup might be closed)
     });
+  }
+
+  private _onStorageChanged(changes: { [key: string]: chrome.storage.StorageChange }, areaName: string): void {
+    if (areaName === 'local' && changes.extensionEnabled) {
+      const isEnabled = changes.extensionEnabled.newValue !== false;
+      debugLog('Extension enabled changed to:', isEnabled);
+      // Update icon based on enabled state AND connection state
+      const isConnected = this._activeConnection !== undefined;
+      void this._updateGlobalIcon(isEnabled && isConnected);
+
+      // If disabled, disconnect
+      if (!isEnabled && this._activeConnection) {
+        void this._disconnect();
+      }
+    }
   }
 }
 
