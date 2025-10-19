@@ -26,6 +26,7 @@ const Popup: React.FC = () => {
   const [connecting, setConnecting] = useState<boolean>(false);
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [port, setPort] = useState<string>('5555');
+  const [isPro, setIsPro] = useState<boolean>(false);
 
   const updateStatus = async () => {
     // Get current tab
@@ -50,9 +51,10 @@ const Popup: React.FC = () => {
 
   useEffect(() => {
     // Load initial state
-    chrome.storage.local.get(['extensionEnabled', 'mcpPort'], (result) => {
+    chrome.storage.local.get(['extensionEnabled', 'mcpPort', 'isPro'], (result) => {
       setEnabled(result.extensionEnabled !== false); // Default to true
       setPort(result.mcpPort || '5555'); // Default to 5555
+      setIsPro(result.isPro === true); // Default to false
     });
 
     // Get initial status
@@ -97,6 +99,12 @@ const Popup: React.FC = () => {
       setPort(result.mcpPort || '5555');
     });
     setShowSettings(false);
+  };
+
+  const handleSignIn = () => {
+    const extensionId = chrome.runtime.id;
+    const loginUrl = `http://localhost:4010/extension/login?extension_id=${extensionId}`;
+    chrome.tabs.create({ url: loginUrl });
   };
 
   if (showSettings) {
@@ -179,20 +187,29 @@ const Popup: React.FC = () => {
           </button>
         </div>
 
-        <div className="pro-section">
-          <p className="pro-text">Unlock advanced features with PRO</p>
-          <a
-            href="https://mcp-for-chrome.railsblueprint.com/pro"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="pro-button"
-          >
-            Upgrade to PRO
-          </a>
-          <button className="signin-link">
-            Already have PRO? Sign in
-          </button>
-        </div>
+        {!isPro && (
+          <div className="pro-section">
+            <p className="pro-text">Unlock advanced features with PRO</p>
+            <a
+              href="https://mcp-for-chrome.railsblueprint.com/pro"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="pro-button"
+            >
+              Upgrade to PRO
+            </a>
+            <button className="signin-link" onClick={handleSignIn}>
+              Already have PRO? Sign in
+            </button>
+          </div>
+        )}
+
+        {isPro && (
+          <div className="pro-section pro-active">
+            <p className="pro-text">✓ PRO Account Active</p>
+            <p className="pro-features">Advanced features unlocked</p>
+          </div>
+        )}
 
         <div className="links-section">
           <button

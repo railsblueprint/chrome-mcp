@@ -184,12 +184,23 @@ body {
   border-radius: 8px;
 }
 
+.pro-section.pro-active {
+  background: linear-gradient(135deg, #28a745 0%, #20883a 100%);
+}
+
 .pro-text {
   color: white;
   font-size: 13px;
   margin: 0 0 4px 0;
   line-height: 1.4;
   font-weight: 500;
+}
+
+.pro-features {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.4;
 }
 
 .pro-button {
