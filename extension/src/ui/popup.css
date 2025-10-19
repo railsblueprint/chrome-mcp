@@ -174,6 +174,59 @@ body {
   transform: scale(0.98);
 }
 
+.pro-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  margin-top: 16px;
+  background: linear-gradient(135deg, #1c75bc 0%, #2c5060 100%);
+  border-radius: 8px;
+}
+
+.pro-text {
+  color: white;
+  font-size: 13px;
+  margin: 0 0 4px 0;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+.pro-button {
+  display: block;
+  text-align: center;
+  padding: 12px 20px;
+  background-color: white;
+  color: #1c75bc;
+  text-decoration: none;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.pro-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.signin-link {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
+  padding: 4px;
+  text-decoration: underline;
+  font-family: inherit;
+}
+
+.signin-link:hover {
+  color: white;
+}
+
 .links-section {
   display: flex;
   flex-direction: column;

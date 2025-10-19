@@ -179,6 +179,21 @@ const Popup: React.FC = () => {
           </button>
         </div>
 
+        <div className="pro-section">
+          <p className="pro-text">Unlock advanced features with PRO</p>
+          <a
+            href="https://mcp-for-chrome.railsblueprint.com/pro"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="pro-button"
+          >
+            Upgrade to PRO
+          </a>
+          <button className="signin-link">
+            Already have PRO? Sign in
+          </button>
+        </div>
+
         <div className="links-section">
           <button
             className="settings-link"
