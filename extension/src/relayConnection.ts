@@ -23,18 +23,34 @@ export function debugLog(...args: unknown[]): void {
 }
 
 type ProtocolCommand = {
-  id: number;
+  id: number | string; // Can be numeric (direct mode) or string (proxy mode)
   method: string;
   params?: any;
 };
 
 type ProtocolResponse = {
-  id?: number;
+  id?: number | string;
   method?: string;
   params?: any;
   result?: any;
   error?: string;
 };
+
+// Connection mode detection
+type ConnectionMode = 'direct' | 'proxy' | 'proxy-control';
+
+function detectConnectionMode(id: number | string): ConnectionMode {
+  if (typeof id === 'number') {
+    return 'direct';
+  }
+  if (typeof id === 'string' && id.startsWith('proxy:')) {
+    return 'proxy-control';
+  }
+  if (typeof id === 'string' && id.includes(':')) {
+    return 'proxy';
+  }
+  return 'direct';
+}
 
 export class RelayConnection {
   private _debuggee: chrome.debugger.Debuggee;
@@ -45,6 +61,9 @@ export class RelayConnection {
   private _tabPromiseResolve!: () => void;
   private _closed = false;
   private _stealthMode: boolean = false;
+  private _connectionMap: Map<string, number> = new Map(); // connectionId → tabId
+  private _browserName: string;
+  private _accessToken?: string;
 
   onclose?: () => void;
   onStealthModeSet?: (stealth: boolean) => void;
@@ -55,6 +74,8 @@ export class RelayConnection {
     this._debuggee = { };
     this._tabPromise = new Promise(resolve => this._tabPromiseResolve = resolve);
     this._ws = ws;
+    this._browserName = browserName;
+    this._accessToken = accessToken;
     this._ws.onmessage = this._onMessage.bind(this);
     this._ws.onclose = () => this._onClose();
     // Store listeners for cleanup
@@ -64,6 +85,7 @@ export class RelayConnection {
     chrome.debugger.onDetach.addListener(this._detachListener);
 
     // Send handshake with browser name and optional access token
+    // Note: In proxy mode, proxy sends authenticate request instead
     this._sendHandshake(browserName, accessToken);
   }
 
@@ -174,11 +196,24 @@ export class RelayConnection {
       return;
     }
 
+    // Detect connection mode and extract connectionId if in proxy mode
+    const mode = detectConnectionMode(message.id);
+    let connectionId: string | undefined;
+
+    if (mode === 'proxy' && typeof message.id === 'string') {
+      // Extract connectionId from "conn-abc:1" → "conn-abc"
+      const parts = message.id.split(':');
+      if (parts.length === 2) {
+        connectionId = parts[0];
+        debugLog('Proxy mode detected, connectionId:', connectionId);
+      }
+    }
+
     const response: ProtocolResponse = {
-      id: message.id,
+      id: message.id, // Always preserve the same ID we received
     };
     try {
-      const result = await this._handleCommand(message as ProtocolCommand);
+      const result = await this._handleCommand(message as ProtocolCommand, connectionId);
       // Ensure result is always set, even if undefined (for JSON-RPC compliance)
       response.result = result !== undefined ? result : {};
     } catch (error: any) {
@@ -189,7 +224,28 @@ export class RelayConnection {
     this._sendMessage(response);
   }
 
-  private async _handleCommand(message: ProtocolCommand): Promise<any> {
+  private async _handleCommand(message: ProtocolCommand, connectionId?: string): Promise<any> {
+    // Handle authenticate request from proxy (proxy-control mode)
+    if (message.method === 'authenticate') {
+      debugLog('Received authenticate request from proxy');
+      return {
+        name: this._browserName,
+        accessToken: this._accessToken
+      };
+    }
+
+    // In proxy mode, use connectionId to look up the correct tab
+    if (connectionId) {
+      const tabId = this._connectionMap.get(connectionId);
+      if (tabId !== undefined) {
+        debugLog(`Using tab ${tabId} for connection ${connectionId}`);
+        // Override debuggee temporarily for this command
+        this._debuggee = { tabId };
+      } else {
+        debugLog(`No tab mapped for connection ${connectionId} yet`);
+      }
+    }
+
     if (message.method === 'attachToTab') {
       await this._tabPromise;
 
@@ -240,7 +296,7 @@ export class RelayConnection {
       const activate = message.params?.activate ?? false;
       const stealth = message.params?.stealth ?? false;
       debugLog('Selecting tab:', tabIndex, 'activate:', activate, 'stealth:', stealth);
-      return await this._selectTab(tabIndex, activate, stealth);
+      return await this._selectTab(tabIndex, activate, stealth, connectionId);
     }
     if (message.method === 'createTab') {
       const url = message.params?.url || 'about:blank';
@@ -248,7 +304,7 @@ export class RelayConnection {
       const stealth = message.params?.stealth ?? false;
       debugLog('Creating new tab - received params:', message.params);
       debugLog('Creating new tab - url:', url, 'activate:', activate, 'stealth:', stealth);
-      return await this._createTab(url, activate, stealth);
+      return await this._createTab(url, activate, stealth, connectionId);
     }
     if (message.method === 'activateTab') {
       const tabIndex = message.params?.tabIndex;
@@ -411,7 +467,7 @@ export class RelayConnection {
     };
   }
 
-  private async _selectTab(tabIndex: number, activate: boolean = false, stealth: boolean = false): Promise<any> {
+  private async _selectTab(tabIndex: number, activate: boolean = false, stealth: boolean = false, connectionId?: string): Promise<any> {
     const allTabs = await chrome.tabs.query({});
 
     if (tabIndex < 0 || tabIndex >= allTabs.length) {
@@ -437,6 +493,12 @@ export class RelayConnection {
 
     // Update the debuggee to attach to this tab
     this._debuggee = { tabId: selectedTab.id };
+
+    // In proxy mode, store connection mapping
+    if (connectionId) {
+      this._connectionMap.set(connectionId, selectedTab.id);
+      debugLog(`Stored connection mapping: ${connectionId} → tab ${selectedTab.id}`);
+    }
 
     // Notify background script about tab connection
     if (this.onTabConnected) {
@@ -473,7 +535,7 @@ export class RelayConnection {
     };
   }
 
-  private async _createTab(url: string, activate: boolean = true, stealth: boolean = false): Promise<any> {
+  private async _createTab(url: string, activate: boolean = true, stealth: boolean = false, connectionId?: string): Promise<any> {
     // Create a new tab
     const newTab = await chrome.tabs.create({
       url: url,
@@ -486,6 +548,12 @@ export class RelayConnection {
 
     // Update the debuggee to attach to this new tab
     this._debuggee = { tabId: newTab.id };
+
+    // In proxy mode, store connection mapping
+    if (connectionId) {
+      this._connectionMap.set(connectionId, newTab.id);
+      debugLog(`Stored connection mapping: ${connectionId} → tab ${newTab.id}`);
+    }
 
     // Notify background script about tab connection
     if (this.onTabConnected) {
