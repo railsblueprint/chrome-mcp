@@ -51,25 +51,27 @@ class ProxyClientBackend {
 
       this._ws = new WebSocket(this._proxyUrl);
 
-      this._ws.on('open', () => {
+      this._ws.on('open', async () => {
         debugLog('WebSocket connected to proxy');
         this._connected = true;
-        this._sendHandshake();
+
+        try {
+          await this._sendHandshake();
+          debugLog('Handshake acknowledged, authenticated successfully');
+          this._authenticated = true;
+          clearTimeout(timeout);
+          resolve();
+        } catch (error) {
+          debugLog('Handshake failed:', error);
+          clearTimeout(timeout);
+          reject(error);
+        }
       });
 
       this._ws.on('message', (data) => {
         try {
           const message = JSON.parse(data.toString());
           debugLog('Received message:', JSON.stringify(message).substring(0, 100));
-
-          // Handle handshake confirmation (JSON-RPC style)
-          if (message.method === 'handshake_ack') {
-            debugLog('Handshake acknowledged, authenticated successfully');
-            this._authenticated = true;
-            clearTimeout(timeout);
-            resolve();
-            return;
-          }
 
           // Handle status messages (legacy type field - can be removed later)
           if (message.type === 'status') {
@@ -141,14 +143,29 @@ class ProxyClientBackend {
   _sendHandshake() {
     debugLog('Sending MCP client handshake...');
 
+    const requestId = randomUUID();
+
     const handshake = {
+      jsonrpc: '2.0',
+      id: requestId,
       method: 'mcp_handshake',
       params: {
         accessToken: this._accessToken
       }
     };
 
-    this._ws.send(JSON.stringify(handshake));
+    // Wait for handshake response
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        this._pendingRequests.delete(requestId);
+        reject(new Error('Handshake timeout'));
+      }, 30000);
+
+      this._pendingRequests.set(requestId, { resolve, reject, timeoutId });
+
+      debugLog('Sending handshake with request ID:', requestId);
+      this._ws.send(JSON.stringify(handshake));
+    });
   }
 
   /**
@@ -192,6 +209,7 @@ class ProxyClientBackend {
       this._pendingRequests.set(requestId, { resolve, reject, timeoutId });
 
       const message = {
+        jsonrpc: '2.0',
         id: requestId,
         method: 'list_extensions',
         params: {}
@@ -222,6 +240,7 @@ class ProxyClientBackend {
       this._pendingRequests.set(requestId, { resolve, reject, timeoutId });
 
       const message = {
+        jsonrpc: '2.0',
         id: requestId,
         method: 'connect',
         params: {
@@ -305,6 +324,7 @@ class ProxyClientBackend {
       this._pendingRequests.set(requestId, { resolve, reject, timeoutId });
 
       const message = {
+        jsonrpc: '2.0',
         id: requestId,
         method: command.method,
         params: command.params
