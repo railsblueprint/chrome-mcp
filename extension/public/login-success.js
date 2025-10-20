@@ -20,21 +20,26 @@
   const accessToken = params.get('access');
   const refreshToken = params.get('refresh');
 
+  console.log('[Login Success] URL params:', { accessToken, refreshToken });
+
   if (accessToken && refreshToken) {
-    // Store tokens in chrome.storage.local
-    chrome.storage.local.set({
+    console.log('[Login Success] Sending message to background script...');
+    // Send message to background script
+    chrome.runtime.sendMessage({
+      type: 'loginSuccess',
       accessToken: accessToken,
-      refreshToken: refreshToken,
-      isPro: true
-    }, () => {
-      console.log('Tokens saved successfully');
+      refreshToken: refreshToken
+    }, (response) => {
+      console.log('[Login Success] Response from background:', response);
 
       // Close this tab after a short delay
       setTimeout(() => {
+        console.log('[Login Success] Closing tab...');
         window.close();
       }, 1000);
     });
   } else {
+    console.error('[Login Success] Missing tokens!');
     // Missing tokens - show error
     document.querySelector('.container').innerHTML = `
       <h1 style="color: #f44336;">Login Failed</h1>

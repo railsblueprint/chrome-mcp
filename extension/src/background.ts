@@ -30,6 +30,12 @@ type PageMessage = {
   type: 'getConnectionStatus';
 } | {
   type: 'disconnect';
+} | {
+  type: 'loginSuccess';
+  accessToken: string;
+  refreshToken: string;
+} | {
+  type: 'focusTab';
 };
 
 class TabShareExtension {
@@ -141,6 +147,28 @@ class TabShareExtension {
         this._disconnect().then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
+        return true;
+      case 'loginSuccess':
+        debugLog('Login success received, saving tokens...');
+        chrome.storage.local.set({
+          accessToken: message.accessToken,
+          refreshToken: message.refreshToken,
+          isPro: true
+        }, () => {
+          debugLog('Tokens saved to storage');
+          sendResponse({ success: true });
+        });
+        return true;
+      case 'focusTab':
+        debugLog('Focus tab request received from tab:', sender.tab?.id);
+        if (sender.tab?.id) {
+          chrome.tabs.update(sender.tab.id, { active: true }, () => {
+            debugLog('Tab focused successfully');
+            sendResponse({ success: true });
+          });
+        } else {
+          sendResponse({ success: false, error: 'No tab ID' });
+        }
         return true;
     }
     return false;

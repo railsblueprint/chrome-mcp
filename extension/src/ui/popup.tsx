@@ -17,6 +17,7 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './popup.css';
+import { config } from '../config';
 
 const Popup: React.FC = () => {
   const [enabled, setEnabled] = useState<boolean>(true);
@@ -51,14 +52,29 @@ const Popup: React.FC = () => {
 
   useEffect(() => {
     // Load initial state
-    chrome.storage.local.get(['extensionEnabled', 'mcpPort', 'isPro'], (result) => {
-      setEnabled(result.extensionEnabled !== false); // Default to true
-      setPort(result.mcpPort || '5555'); // Default to 5555
-      setIsPro(result.isPro === true); // Default to false
-    });
+    const loadState = () => {
+      console.log('[Popup] Loading state from storage...');
+      chrome.storage.local.get(['extensionEnabled', 'mcpPort', 'isPro'], (result) => {
+        console.log('[Popup] Storage contents:', result);
+        setEnabled(result.extensionEnabled !== false); // Default to true
+        setPort(result.mcpPort || '5555'); // Default to 5555
+        setIsPro(result.isPro === true); // Default to false
+        console.log('[Popup] Set isPro to:', result.isPro === true);
+      });
+    };
+
+    loadState();
 
     // Get initial status
     updateStatus();
+
+    // Also reload state when popup becomes visible (e.g., after login)
+    const visibilityListener = () => {
+      if (!document.hidden) {
+        loadState();
+      }
+    };
+    document.addEventListener('visibilitychange', visibilityListener);
 
     // Listen for status change broadcasts from background script
     const messageListener = (message: any) => {
@@ -74,9 +90,19 @@ const Popup: React.FC = () => {
     };
     chrome.tabs.onActivated.addListener(tabListener);
 
+    // Listen for storage changes (e.g., login completion)
+    const storageListener = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
+      if (areaName === 'local' && changes.isPro) {
+        setIsPro(changes.isPro.newValue === true);
+      }
+    };
+    chrome.storage.onChanged.addListener(storageListener);
+
     return () => {
       chrome.runtime.onMessage.removeListener(messageListener);
       chrome.tabs.onActivated.removeListener(tabListener);
+      chrome.storage.onChanged.removeListener(storageListener);
+      document.removeEventListener('visibilitychange', visibilityListener);
     };
   }, []);
 
@@ -103,8 +129,13 @@ const Popup: React.FC = () => {
 
   const handleSignIn = () => {
     const extensionId = chrome.runtime.id;
-    const loginUrl = `http://localhost:4010/extension/login?extension_id=${extensionId}`;
-    chrome.tabs.create({ url: loginUrl });
+    chrome.tabs.create({ url: config.loginUrl(extensionId), active: false });
+  };
+
+  const handleLogout = () => {
+    chrome.storage.local.remove(['accessToken', 'refreshToken', 'isPro'], () => {
+      setIsPro(false);
+    });
   };
 
   if (showSettings) {
@@ -190,24 +221,27 @@ const Popup: React.FC = () => {
         {!isPro && (
           <div className="pro-section">
             <p className="pro-text">Unlock advanced features with PRO</p>
-            <a
-              href="https://mcp-for-chrome.railsblueprint.com/pro"
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
               className="pro-button"
+              onClick={() => {
+                const extensionId = chrome.runtime.id;
+                chrome.tabs.create({ url: config.upgradeUrl(extensionId), active: false });
+              }}
             >
               Upgrade to PRO
-            </a>
-            <button className="signin-link" onClick={handleSignIn}>
-              Already have PRO? Sign in
             </button>
+            <div className="signin-text">
+              Already have PRO? <button className="signin-link" onClick={handleSignIn}>Sign in</button>
+            </div>
           </div>
         )}
 
         {isPro && (
           <div className="pro-section pro-active">
             <p className="pro-text">✓ PRO Account Active</p>
-            <p className="pro-features">Advanced features unlocked</p>
+            <button className="logout-link" onClick={handleLogout}>
+              Logout
+            </button>
           </div>
         )}
 
@@ -219,21 +253,23 @@ const Popup: React.FC = () => {
             ⚙️ Settings
           </button>
           <a
-            href="http://mcp-for-chrome.railsblueprint.com/docs"
+            href={config.docsUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="doc-link"
           >
             📖 Documentation
           </a>
-          <a
-            href="https://www.buymeacoffee.com/mcp.for.chrome"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="beer-link"
-          >
-            🍺 Buy me a beer
-          </a>
+          {!isPro && (
+            <a
+              href={config.buyMeACoffeeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="beer-link"
+            >
+              🍺 Buy me a beer
+            </a>
+          )}
         </div>
       </div>
     </div>

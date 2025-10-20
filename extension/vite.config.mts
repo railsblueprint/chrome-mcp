@@ -37,6 +37,7 @@ export default defineConfig({
     })
   ],
   root: resolve(__dirname, 'src/ui'),
+  envDir: resolve(__dirname, './'),  // Look for .env files in extension/ directory
   build: {
     outDir: resolve(__dirname, 'dist/'),
     emptyOutDir: false,
