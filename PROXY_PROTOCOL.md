@@ -598,7 +598,13 @@ All other methods are forwarded through the proxy to the connected extension:
 | CDP Commands | `forwardCDPCommand` (all Chrome DevTools Protocol methods) |
 | Interaction | `click`, `type`, `hover`, `screenshot` |
 
-The proxy passes these through without modification (except removing `connectionId`).
+**IMPORTANT**: MCP clients send standard JSON-RPC requests with numeric IDs. They do NOT include a `connectionId` field. The proxy maintains an internal mapping of which MCP WebSocket is connected to which extension, and performs ID mapping automatically:
+
+1. MCP sends: `{"id": 4, "method": "createTab", "params": {...}}`
+2. Proxy looks up connectionId for this MCP's WebSocket (e.g., "conn-abc")
+3. Proxy maps ID and forwards: `{"id": "conn-abc:4", "method": "createTab", "params": {...}}`
+4. Extension responds: `{"id": "conn-abc:4", "result": {...}}`
+5. Proxy unmaps ID and forwards: `{"id": 4, "result": {...}}`
 
 ## Connection Lifecycle
 
@@ -622,10 +628,10 @@ The proxy passes these through without modification (except removing `connection
 5. Proxy responds with list: {"id": 2, "result": {...}}
 6. MCP requests connect: {"id": 3, "method": "connect", ...}
 7. Proxy responds with connection_id: {"id": 3, "result": {"connection_id": "..."}}
-8. MCP sends tool commands: {"id": 4, "method": "createTab", ..., "connectionId": "..."}
-9. Proxy forwards to Extension (removes connectionId)
-10. Extension responds: {"id": 4, "result": {...}}
-11. Proxy forwards response back to MCP: {"id": 4, "result": {...}}
+8. MCP sends tool commands: {"id": 4, "method": "createTab", "params": {...}}
+9. Proxy maps ID and forwards: {"id": "conn-abc:4", "method": "createTab", "params": {...}}
+10. Extension responds: {"id": "conn-abc:4", "result": {...}}
+11. Proxy unmaps ID and forwards: {"id": 4, "result": {...}}
 ```
 
 ### Disconnection

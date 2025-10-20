@@ -307,11 +307,10 @@ class ProxyClientBackend {
       const message = {
         id: requestId,
         method: command.method,
-        params: command.params,
-        connectionId: this._connectionId  // Add connectionId for routing
+        params: command.params
       };
 
-      debugLog('Calling tool:', name, '-> command:', command.method, 'with request ID:', requestId, 'connectionId:', this._connectionId);
+      debugLog('Calling tool:', name, '-> command:', command.method, 'with request ID:', requestId);
       this._ws.send(JSON.stringify(message));
     });
   }
