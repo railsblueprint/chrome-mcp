@@ -47,7 +47,7 @@ class MCPConnection {
     if (this.mode === 'proxy') {
       // Authenticate with proxy
       debugLog('Authenticating with proxy...');
-      await this.sendRequest('mcp_handshake', { accessToken: this.accessToken });
+      await this.sendRequest('mcp_handshake', { access_token: this.accessToken });
       this._authenticated = true;
       debugLog('Authenticated successfully');
 

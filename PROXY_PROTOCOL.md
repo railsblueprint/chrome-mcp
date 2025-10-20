@@ -406,7 +406,7 @@ MCP → Proxy:
   "id": 1,
   "method": "mcp_handshake",
   "params": {
-    "accessToken": "eyJhbGciOiJIUzI1NiJ9..."
+    "access_token": "eyJhbGciOiJIUzI1NiJ9..."
   }
 }
 ```
