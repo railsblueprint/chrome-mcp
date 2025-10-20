@@ -44,7 +44,8 @@ class StatefulBackend {
     this._clientInfo = clientInfo;
 
     // Check for stored authentication tokens (async, in background)
-    this._oauthClient.isAuthenticated().then(isAuth => {
+    // Store promise so tools can await it before checking auth status
+    this._authCheckPromise = this._oauthClient.isAuthenticated().then(isAuth => {
       this._isAuthenticated = isAuth;
       if (isAuth) {
         debugLog('[StatefulBackend] Found stored authentication tokens');
@@ -67,6 +68,55 @@ class StatefulBackend {
 
     // Don't initialize tools backend here - it will be lazy-initialized in listTools()
     debugLog('[StatefulBackend] Initialize complete (tools backend will be lazy-loaded)');
+  }
+
+  /**
+   * Ensure auth check has completed before proceeding
+   * Tools that need auth status should call this first
+   */
+  async _ensureAuthChecked() {
+    if (this._authCheckPromise) {
+      await this._authCheckPromise;
+    }
+  }
+
+  /**
+   * Enhance browser tool descriptions for better LLM understanding
+   * Adds context about tab operations and clear prerequisites
+   */
+  _enhanceToolDescriptions(tools) {
+    const enhancements = {
+      browser_close: 'Close the currently active browser tab. The tab must be connected first using browser_tabs. Useful for cleanup after completing automation tasks.',
+      browser_resize: 'Resize the currently active browser tab window to specific dimensions. Requires an active tab connection via browser_tabs.',
+      browser_console_messages: 'Get console messages (logs, warnings, errors) from the active browser tab. Supports filtering by error type, regex patterns, and limiting results. Useful for debugging and monitoring page behavior.',
+      browser_handle_dialog: 'Handle browser dialogs (alerts, confirms, prompts) in the active tab. Can accept or reject the dialog, and optionally provide text for prompts.',
+      browser_evaluate: 'Execute JavaScript code in the active browser tab and return the result. Can run code in page context or on specific elements. Useful for extracting data, modifying page state, or triggering custom functionality.',
+      browser_file_upload: 'Upload files to a file input element in the active tab. Provide absolute paths to files. Requires browser_tabs connection and a file input element to be present.',
+      browser_fill_form: 'Fill multiple form fields at once in the active tab. More efficient than typing into each field individually. Supports text boxes, checkboxes, radio buttons, dropdowns, and sliders.',
+      browser_press_key: 'Press a keyboard key on the currently focused element in the active tab. Useful for Enter, Tab, Arrow keys, etc. Requires browser_tabs connection.',
+      browser_type: 'Type text into an editable element in the active tab. Can submit forms by pressing Enter after typing. More reliable than pressing individual keys.',
+      browser_navigate: 'Navigate the active browser tab to a specified URL. Requires browser_tabs connection. Waits for page load to complete.',
+      browser_navigate_back: 'Go back to the previous page in the active tab browser history. Equivalent to clicking the back button.',
+      browser_reload: 'Reload the current page in the active tab. Useful after making changes or to get fresh data.',
+      browser_network_requests: 'Get all network requests (XHR, fetch, resources) made by the active tab since page load. Supports filtering by URL pattern and HTTP method. Useful for monitoring API calls and tracking data flow.',
+      browser_take_screenshot: 'Capture a screenshot of the active browser tab. Can screenshot the full page, visible viewport, or specific elements. Returns image data. Note: For interactive automation, use browser_snapshot instead as it provides element references.',
+      browser_snapshot: 'Capture an accessibility tree snapshot of the active tab DOM structure. Returns element hierarchy with selectors and text content. Use this instead of screenshots for automation tasks as it provides actionable element references.',
+      browser_click: 'Click on an element in the active tab. Can perform left, right, or double clicks with modifier keys. Specify element by selector, XPath, or text reference.',
+      browser_drag: 'Perform drag and drop between two elements in the active tab. Useful for reordering lists or moving items between containers.',
+      browser_hover: 'Move mouse over an element in the active tab without clicking. Useful for revealing tooltips or triggering hover effects.',
+      browser_select_option: 'Select options in a native HTML <select> dropdown in the active tab. Only works with standard <select> elements, not custom dropdowns. Strings match both option values and labels. Supports multi-select.',
+      browser_wait_for: 'Wait for specific conditions in the active tab before proceeding. Can wait for text to appear/disappear or wait a fixed time period. Useful for handling dynamic content loading and ensuring elements are ready.'
+    };
+
+    return tools.map(tool => {
+      if (enhancements[tool.name]) {
+        return {
+          ...tool,
+          description: enhancements[tool.name]
+        };
+      }
+      return tool;
+    });
   }
 
   async listTools() {
@@ -158,6 +208,9 @@ class StatefulBackend {
         );
       }
 
+      // Enhance browser tool descriptions for better LLM understanding
+      browserTools = this._enhanceToolDescriptions(browserTools);
+
       debugLog(`[StatefulBackend] Returning ${browserTools.length} browser tools (filtered: ${!this._debugMode})`);
     } catch (error) {
       debugLog('[StatefulBackend] Error getting browser tools:', error);
@@ -210,6 +263,9 @@ class StatefulBackend {
         }]
       };
     }
+
+    // Wait for auth check to complete before deciding connection mode
+    await this._ensureAuthChecked();
 
     debugLog('[StatefulBackend] Attempting to connect...');
 
@@ -512,6 +568,9 @@ class StatefulBackend {
 
   async _handleAuthStatus() {
     debugLog('[StatefulBackend] Handling auth status...');
+
+    // Wait for auth check to complete before returning status
+    await this._ensureAuthChecked();
 
     if (!this._isAuthenticated || !this._userInfo) {
       return {
