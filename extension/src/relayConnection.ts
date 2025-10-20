@@ -200,11 +200,14 @@ export class RelayConnection {
     let connectionId: string | undefined;
 
     if (mode === 'proxy' && typeof message.id === 'string') {
-      // Extract connectionId from "conn-abc:1" → "conn-abc"
-      const parts = message.id.split(':');
-      if (parts.length === 2) {
-        connectionId = parts[0];
+      // Extract connectionId from "conn-abc:requestId" → "conn-abc"
+      // Use indexOf to find first colon, then split there
+      const colonIndex = message.id.indexOf(':');
+      if (colonIndex !== -1) {
+        connectionId = message.id.substring(0, colonIndex);
         debugLog('Proxy mode detected, connectionId:', connectionId);
+      } else {
+        debugLog('Warning: Proxy mode detected but no colon in ID:', message.id);
       }
     }
 
@@ -213,18 +216,27 @@ export class RelayConnection {
       id: message.id, // Always preserve the same ID we received
     };
     try {
+      debugLog('Executing command:', message.method, 'with connectionId:', connectionId);
       const result = await this._handleCommand(message as ProtocolCommand, connectionId);
+      debugLog('Command completed successfully:', message.method);
       // Ensure result is always set, even if undefined (for JSON-RPC compliance)
       response.result = result !== undefined ? result : {};
     } catch (error: any) {
-      debugLog('Error handling command:', error);
+      debugLog('Error handling command:', message.method, error);
+      debugLog('Error stack:', error.stack);
       response.error = {
         code: -32000,
-        message: error.message
+        message: error.message || String(error)
       };
     }
-    debugLog('Sending response:', response);
-    this._sendMessage(response);
+
+    try {
+      debugLog('Sending response:', JSON.stringify(response).substring(0, 200));
+      this._sendMessage(response);
+      debugLog('Response sent successfully');
+    } catch (sendError: any) {
+      debugLog('ERROR sending response:', sendError);
+    }
   }
 
   private async _handleCommand(message: ProtocolCommand, connectionId?: string): Promise<any> {
