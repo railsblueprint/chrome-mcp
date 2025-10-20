@@ -382,14 +382,14 @@ Extension → Proxy:
   "id": "proxy:1",
   "result": {
     "name": "Chrome 141",
-    "accessToken": "eyJhbGciOiJIUzI1NiJ9..."
+    "access_token": "eyJhbGciOiJIUzI1NiJ9..."
   }
 }
 ```
 
 **Fields:**
 - `name` (string, required): Browser name/identifier shown to users
-- `accessToken` (string, required): JWT token for authentication
+- `access_token` (string, required): JWT token for authentication
 
 **Errors:**
 - Invalid token → Connection closed by proxy

@@ -233,7 +233,7 @@ export class RelayConnection {
       debugLog('Received authenticate request from proxy');
       return {
         name: this._browserName,
-        accessToken: this._accessToken
+        access_token: this._accessToken
       };
     }
 
