@@ -12,6 +12,7 @@
 const path = require('path');
 const { BrowserServerBackend } = require(path.join(__dirname, '../node_modules/playwright/lib/mcp/browser/browserServerBackend'));
 const { PrimaryServer } = require('./primaryServer');
+const { OAuth2Client } = require('./oauth');
 
 // Helper function for debug logging
 function debugLog(...args) {
@@ -28,7 +29,11 @@ class StatefulBackend {
     this._state = 'passive'; // 'passive', 'active', 'connected'
     this._activeBackend = null;
     this._debugMode = config.debug || false;
-    this._isAuthenticated = false; // Will be set based on clientInfo in initialize()
+    this._isAuthenticated = false; // Will be set based on stored tokens in initialize()
+    this._userInfo = null; // Will contain {isPro, email} after authentication
+    this._oauthClient = new OAuth2Client({
+      authBaseUrl: process.env.AUTH_BASE_URL || 'https://mcp-for-chrome.railsblueprint.com'
+    });
   }
 
   async initialize(server, clientInfo) {
@@ -36,9 +41,20 @@ class StatefulBackend {
     this._server = server;
     this._clientInfo = clientInfo;
 
-    // Check if client provided authentication (for remote proxy mode)
-    // TODO: Implement authentication check when OAuth2 is added
-    this._isAuthenticated = false;
+    // Check for stored authentication tokens
+    this._isAuthenticated = await this._oauthClient.isAuthenticated();
+    if (this._isAuthenticated) {
+      debugLog('[StatefulBackend] Found stored authentication tokens');
+      // Verify tokens and get user info
+      this._userInfo = await this._oauthClient.verifyTokens();
+      if (!this._userInfo) {
+        debugLog('[StatefulBackend] Token verification failed, clearing auth state');
+        this._isAuthenticated = false;
+        await this._oauthClient.clearTokens();
+      } else {
+        debugLog('[StatefulBackend] User authenticated:', this._userInfo);
+      }
+    }
 
     // Initialize a backend instance to get browser tools (but don't connect yet)
     debugLog('[StatefulBackend] About to initialize tools backend...');
@@ -73,6 +89,21 @@ class StatefulBackend {
       {
         name: 'status',
         description: 'Get current connection status and mode.',
+        inputSchema: { type: 'object', properties: {}, required: [] }
+      },
+      {
+        name: 'authenticate',
+        description: 'Authenticate with Blueprint MCP PRO account. Opens browser for OAuth2 login and stores authentication tokens.',
+        inputSchema: { type: 'object', properties: {}, required: [] }
+      },
+      {
+        name: 'logout',
+        description: 'Log out and clear stored authentication tokens.',
+        inputSchema: { type: 'object', properties: {}, required: [] }
+      },
+      {
+        name: 'auth_status',
+        description: 'Check authentication status and PRO account information.',
         inputSchema: { type: 'object', properties: {}, required: [] }
       }
     ];
@@ -124,6 +155,15 @@ class StatefulBackend {
 
       case 'status':
         return await this._handleStatus();
+
+      case 'authenticate':
+        return await this._handleAuthenticate();
+
+      case 'logout':
+        return await this._handleLogout();
+
+      case 'auth_status':
+        return await this._handleAuthStatus();
     }
 
     // For browser tools, use active backend if connected, otherwise use tools backend
@@ -297,6 +337,132 @@ class StatefulBackend {
     } catch (error) {
       debugLog('[StatefulBackend] Failed to send tool list changed notification:', error);
     }
+  }
+
+  async _handleAuthenticate() {
+    debugLog('[StatefulBackend] Handling authenticate...');
+
+    if (this._isAuthenticated) {
+      return {
+        content: [{
+          type: 'text',
+          text: `### Already Authenticated\n\nYou are already logged in as: ${this._userInfo?.email || 'Unknown'}\n\nUse \`logout\` to sign out and authenticate with a different account.`
+        }]
+      };
+    }
+
+    try {
+      debugLog('[StatefulBackend] Starting OAuth flow...');
+
+      const tokens = await this._oauthClient.authenticate();
+
+      debugLog('[StatefulBackend] Authentication successful, verifying tokens...');
+
+      // Verify tokens and get user info
+      this._userInfo = await this._oauthClient.verifyTokens();
+
+      if (!this._userInfo) {
+        debugLog('[StatefulBackend] Token verification failed');
+        await this._oauthClient.clearTokens();
+
+        return {
+          content: [{
+            type: 'text',
+            text: `### Authentication Failed\n\nFailed to verify authentication tokens. Please try again.`
+          }],
+          isError: true
+        };
+      }
+
+      this._isAuthenticated = true;
+
+      debugLog('[StatefulBackend] Authentication complete:', this._userInfo);
+
+      const proStatus = this._userInfo.isPro ? '✅ PRO Account' : '❌ Free Account';
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### ✅ Authentication Successful!\n\n` +
+                `**Email:** ${this._userInfo.email}\n` +
+                `**Status:** ${proStatus}\n\n` +
+                `${this._userInfo.isPro ? 'You now have access to PRO features!' : 'Upgrade to PRO to unlock advanced features.'}`
+        }]
+      };
+    } catch (error) {
+      debugLog('[StatefulBackend] Authentication error:', error);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Authentication Failed\n\n${error.message}\n\nPlease try again or contact support if the problem persists.`
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async _handleLogout() {
+    debugLog('[StatefulBackend] Handling logout...');
+
+    if (!this._isAuthenticated) {
+      return {
+        content: [{
+          type: 'text',
+          text: `### Not Authenticated\n\nYou are not currently logged in.\n\nUse \`authenticate\` to sign in.`
+        }]
+      };
+    }
+
+    try {
+      await this._oauthClient.clearTokens();
+      this._isAuthenticated = false;
+      this._userInfo = null;
+
+      debugLog('[StatefulBackend] Logout successful');
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### ✅ Logged Out\n\nYou have been successfully logged out.\n\nUse \`authenticate\` to sign in again.`
+        }]
+      };
+    } catch (error) {
+      debugLog('[StatefulBackend] Logout error:', error);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Logout Failed\n\n${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async _handleAuthStatus() {
+    debugLog('[StatefulBackend] Handling auth_status...');
+
+    if (!this._isAuthenticated || !this._userInfo) {
+      return {
+        content: [{
+          type: 'text',
+          text: `### ❌ Not Authenticated\n\nYou are not currently logged in.\n\nUse \`authenticate\` to sign in with your Blueprint MCP PRO account.`
+        }]
+      };
+    }
+
+    const proStatus = this._userInfo.isPro ? '✅ PRO Account' : '❌ Free Account';
+
+    return {
+      content: [{
+        type: 'text',
+        text: `### Authentication Status\n\n` +
+              `**Email:** ${this._userInfo.email}\n` +
+              `**Status:** ${proStatus}\n\n` +
+              `${this._userInfo.isPro ? 'You have access to all PRO features!' : 'Upgrade to PRO to unlock advanced features.'}`
+      }]
+    };
   }
 
   serverClosed() {

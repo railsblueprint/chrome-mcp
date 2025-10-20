@@ -1,6 +1,38 @@
+# Exclude everything by default
 **/*
-README.md
-LICENSE
+
+# Include only what's needed for the MCP server
+!README.md
+!LICENSE
 !cli.js
 !index.*
 !config.d.ts
+!package.json
+!patches/**
+
+# Extension files (not needed for MCP server)
+extension/
+icons/
+manifest.json
+public/
+
+# Development files
+.env*
+.vscode/
+.idea/
+
+# Test files
+tests/
+*.test.js
+*.spec.js
+playwright.config.ts
+
+# Git files
+.git/
+.github/
+
+# Other
+Dockerfile
+docker-compose.yml
+update-readme.js
+CLAUDE.md
