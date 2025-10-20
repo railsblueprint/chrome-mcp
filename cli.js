@@ -24,11 +24,12 @@ process.env.STEALTH_MODE = 'true';
 
 const { program } = require('playwright-core/lib/utilsBundle');
 const path = require('path');
-// Access server module using absolute path to bypass export restrictions
-const mcpServer = require(path.join(__dirname, 'node_modules/playwright/lib/mcp/sdk/server'));
-const { resolveCLIConfig } = require(path.join(__dirname, 'node_modules/playwright/lib/mcp/browser/config'));
-const { ExtensionContextFactory } = require(path.join(__dirname, 'node_modules/playwright/lib/mcp/extension/extensionContextFactory'));
-const { setupExitWatchdog } = require(path.join(__dirname, 'node_modules/playwright/lib/mcp/browser/watchdog'));
+// Use require.resolve to find playwright modules in node_modules (works with npx)
+const playwrightPath = path.dirname(require.resolve('playwright/package.json'));
+const mcpServer = require(path.join(playwrightPath, 'lib/mcp/sdk/server'));
+const { resolveCLIConfig } = require(path.join(playwrightPath, 'lib/mcp/browser/config'));
+const { ExtensionContextFactory } = require(path.join(playwrightPath, 'lib/mcp/extension/extensionContextFactory'));
+const { setupExitWatchdog } = require(path.join(playwrightPath, 'lib/mcp/browser/watchdog'));
 
 const packageJSON = require('./package.json');
 
@@ -89,19 +90,14 @@ async function extensionAction(options) {
   }
 }
 
-// Set up command with custom extension handler
+// Set up command
 program
   .version('Version ' + packageJSON.version)
   .name('Blueprint MCP for Chrome')
-  .option('--extension', 'Connect to a running Chrome browser instance. Requires the Blueprint MCP browser extension to be installed.')
+  .description('MCP server for Chrome browser automation using the Blueprint MCP extension')
   .option('--debug', 'Enable debug mode (shows reload/extension tools and verbose logging)')
   .action(async (options) => {
-    if (options.extension) {
-      await extensionAction(options);
-    } else {
-      console.error('Error: --extension flag is required');
-      process.exit(1);
-    }
+    await extensionAction(options);
   });
 
 void program.parseAsync(process.argv);

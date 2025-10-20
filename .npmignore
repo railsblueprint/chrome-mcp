@@ -9,6 +9,7 @@
 !config.d.ts
 !package.json
 !patches/**
+!src/**
 
 # Extension files (not needed for MCP server)
 extension/

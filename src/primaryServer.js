@@ -10,7 +10,9 @@
 
 const { wsServer: WebSocketServer } = require('playwright-core/lib/utilsBundle');
 const path = require('path');
-const { BrowserServerBackend } = require(path.join(__dirname, '../node_modules/playwright/lib/mcp/browser/browserServerBackend'));
+// Use require.resolve to find playwright modules in node_modules (works with npx)
+const playwrightPath = path.dirname(require.resolve('playwright/package.json'));
+const { BrowserServerBackend } = require(path.join(playwrightPath, 'lib/mcp/browser/browserServerBackend'));
 const { randomUUID } = require('crypto');
 
 class PrimaryServer {

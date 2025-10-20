@@ -18,6 +18,7 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './popup.css';
 import { config } from '../config';
+import { getUserInfoFromStorage, getDefaultBrowserName } from '../utils/jwt';
 
 const Popup: React.FC = () => {
   const [enabled, setEnabled] = useState<boolean>(true);
@@ -25,9 +26,11 @@ const Popup: React.FC = () => {
   const [stealthMode, setStealthMode] = useState<boolean | null>(null);
   const [anyConnected, setAnyConnected] = useState<boolean>(false);
   const [connecting, setConnecting] = useState<boolean>(false);
+  const [isPro, setIsPro] = useState<boolean>(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [browserName, setBrowserName] = useState<string>(getDefaultBrowserName());
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [port, setPort] = useState<string>('5555');
-  const [isPro, setIsPro] = useState<boolean>(false);
 
   const updateStatus = async () => {
     // Get current tab
@@ -52,15 +55,23 @@ const Popup: React.FC = () => {
 
   useEffect(() => {
     // Load initial state
-    const loadState = () => {
+    const loadState = async () => {
       console.log('[Popup] Loading state from storage...');
-      chrome.storage.local.get(['extensionEnabled', 'mcpPort', 'isPro'], (result) => {
+      chrome.storage.local.get(['extensionEnabled', 'isPro', 'browserName', 'mcpPort'], (result) => {
         console.log('[Popup] Storage contents:', result);
         setEnabled(result.extensionEnabled !== false); // Default to true
-        setPort(result.mcpPort || '5555'); // Default to 5555
         setIsPro(result.isPro === true); // Default to false
+        setBrowserName(result.browserName || getDefaultBrowserName()); // Load or default
+        setPort(result.mcpPort || '5555'); // Load port for free users
         console.log('[Popup] Set isPro to:', result.isPro === true);
       });
+
+      // Load email from JWT token
+      const userInfo = await getUserInfoFromStorage();
+      if (userInfo) {
+        setUserEmail(userInfo.email);
+        console.log('[Popup] Loaded email from token:', userInfo.email);
+      }
     };
 
     loadState();
@@ -91,9 +102,16 @@ const Popup: React.FC = () => {
     chrome.tabs.onActivated.addListener(tabListener);
 
     // Listen for storage changes (e.g., login completion)
-    const storageListener = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
-      if (areaName === 'local' && changes.isPro) {
-        setIsPro(changes.isPro.newValue === true);
+    const storageListener = async (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
+      if (areaName === 'local') {
+        if (changes.isPro) {
+          setIsPro(changes.isPro.newValue === true);
+        }
+        // Reload email when access token changes (login/logout)
+        if (changes.accessToken) {
+          const userInfo = await getUserInfoFromStorage();
+          setUserEmail(userInfo?.email || null);
+        }
       }
     };
     chrome.storage.onChanged.addListener(storageListener);
@@ -113,15 +131,22 @@ const Popup: React.FC = () => {
   };
 
   const saveSettings = async () => {
-    await chrome.storage.local.set({ mcpPort: port });
+    if (isPro) {
+      // Save browser name for PRO users
+      await chrome.storage.local.set({ browserName });
+    } else {
+      // Save port for free users
+      await chrome.storage.local.set({ mcpPort: port });
+      // Reload extension to apply new port
+      chrome.runtime.reload();
+    }
     setShowSettings(false);
-    // Reload extension to apply new port
-    chrome.runtime.reload();
   };
 
   const cancelSettings = () => {
-    // Reload original port value
-    chrome.storage.local.get(['mcpPort'], (result) => {
+    // Reload original values
+    chrome.storage.local.get(['browserName', 'mcpPort'], (result) => {
+      setBrowserName(result.browserName || getDefaultBrowserName());
       setPort(result.mcpPort || '5555');
     });
     setShowSettings(false);
@@ -135,6 +160,7 @@ const Popup: React.FC = () => {
   const handleLogout = () => {
     chrome.storage.local.remove(['accessToken', 'refreshToken', 'isPro'], () => {
       setIsPro(false);
+      setUserEmail(null);
     });
   };
 
@@ -142,27 +168,42 @@ const Popup: React.FC = () => {
     return (
       <div className="popup-container">
         <div className="popup-header">
-          <button className="back-button" onClick={cancelSettings}>← Back</button>
-          <h1>Settings</h1>
+          <img src="/icons/icon-32.png" alt="Blueprint MCP" className="header-icon" />
+          <h1>Blueprint MCP</h1>
         </div>
 
         <div className="popup-content">
           <div className="settings-form">
-            <label className="settings-label">
-              MCP Server Port:
-              <input
-                type="number"
-                className="settings-input"
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-                min="1"
-                max="65535"
-                placeholder="5555"
-              />
-            </label>
-            <p className="settings-help">
-              Default: 5555. Change this if your MCP server runs on a different port.
-            </p>
+            {isPro ? (
+              <label className="settings-label">
+                Browser Name:
+                <input
+                  type="text"
+                  className="settings-input"
+                  value={browserName}
+                  onChange={(e) => setBrowserName(e.target.value)}
+                  placeholder="Chrome 131"
+                />
+              </label>
+            ) : (
+              <>
+                <label className="settings-label">
+                  MCP Server Port:
+                  <input
+                    type="number"
+                    className="settings-input"
+                    value={port}
+                    onChange={(e) => setPort(e.target.value)}
+                    min="1"
+                    max="65535"
+                    placeholder="5555"
+                  />
+                </label>
+                <p className="settings-help">
+                  Default: 5555. Change this if your MCP server runs on a different port.
+                </p>
+              </>
+            )}
           </div>
 
           <div className="settings-actions">
@@ -181,6 +222,7 @@ const Popup: React.FC = () => {
   return (
     <div className="popup-container">
       <div className="popup-header">
+        <img src="/icons/icon-32.png" alt="Blueprint MCP" className="header-icon" />
         <h1>Blueprint MCP</h1>
       </div>
 
@@ -238,7 +280,10 @@ const Popup: React.FC = () => {
 
         {isPro && (
           <div className="pro-section pro-active">
-            <p className="pro-text">✓ PRO Account Active</p>
+            <div>
+              <p className="pro-text">✓ PRO Account Active</p>
+              {userEmail && <p className="pro-email">{userEmail}</p>}
+            </div>
             <button className="logout-link" onClick={handleLogout}>
               Logout
             </button>

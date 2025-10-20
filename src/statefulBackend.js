@@ -10,7 +10,9 @@
  */
 
 const path = require('path');
-const { BrowserServerBackend } = require(path.join(__dirname, '../node_modules/playwright/lib/mcp/browser/browserServerBackend'));
+// Use require.resolve to find playwright modules in node_modules (works with npx)
+const playwrightPath = path.dirname(require.resolve('playwright/package.json'));
+const { BrowserServerBackend } = require(path.join(playwrightPath, 'lib/mcp/browser/browserServerBackend'));
 const { PrimaryServer } = require('./primaryServer');
 const { OAuth2Client } = require('./oauth');
 
@@ -41,30 +43,30 @@ class StatefulBackend {
     this._server = server;
     this._clientInfo = clientInfo;
 
-    // Check for stored authentication tokens
-    this._isAuthenticated = await this._oauthClient.isAuthenticated();
-    if (this._isAuthenticated) {
-      debugLog('[StatefulBackend] Found stored authentication tokens');
-      // Decode token and get user info
-      this._userInfo = await this._oauthClient.getUserInfo();
-      if (!this._userInfo) {
+    // Check for stored authentication tokens (async, in background)
+    this._oauthClient.isAuthenticated().then(isAuth => {
+      this._isAuthenticated = isAuth;
+      if (isAuth) {
+        debugLog('[StatefulBackend] Found stored authentication tokens');
+        return this._oauthClient.getUserInfo();
+      }
+      return null;
+    }).then(userInfo => {
+      if (userInfo) {
+        this._userInfo = userInfo;
+        debugLog('[StatefulBackend] User authenticated:', this._userInfo);
+      } else if (this._isAuthenticated) {
         debugLog('[StatefulBackend] Failed to decode token, clearing auth state');
         this._isAuthenticated = false;
-        await this._oauthClient.clearTokens();
-      } else {
-        debugLog('[StatefulBackend] User authenticated:', this._userInfo);
+        this._oauthClient.clearTokens().catch(err => debugLog('[StatefulBackend] Error clearing tokens:', err));
       }
-    }
+    }).catch(error => {
+      debugLog('[StatefulBackend] Error checking authentication (non-fatal):', error);
+      this._isAuthenticated = false;
+    });
 
-    // Initialize a backend instance to get browser tools (but don't connect yet)
-    debugLog('[StatefulBackend] About to initialize tools backend...');
-    const path = require('path');
-    const { BrowserServerBackend } = require(path.join(__dirname, '../node_modules/playwright/lib/mcp/browser/browserServerBackend'));
-    debugLog('[StatefulBackend] BrowserServerBackend loaded, creating instance...');
-    this._toolsBackend = new BrowserServerBackend(this._config, this._extensionContextFactory);
-    debugLog('[StatefulBackend] BrowserServerBackend instance created, initializing...');
-    await this._toolsBackend.initialize(server, clientInfo);
-    debugLog('[StatefulBackend] Tools backend initialized successfully!');
+    // Don't initialize tools backend here - it will be lazy-initialized in listTools()
+    debugLog('[StatefulBackend] Initialize complete (tools backend will be lazy-loaded)');
   }
 
   async listTools() {
@@ -112,8 +114,6 @@ class StatefulBackend {
     // This is needed because initialize() is only called on first tool invocation
     if (!this._toolsBackend) {
       debugLog('[StatefulBackend] Tools backend not yet initialized, creating now...');
-      const path = require('path');
-      const { BrowserServerBackend } = require(path.join(__dirname, '../node_modules/playwright/lib/mcp/browser/browserServerBackend'));
       this._toolsBackend = new BrowserServerBackend(this._config, this._extensionContextFactory);
       // Note: BrowserServerBackend.listTools() doesn't need initialize() to be called
       // The tools are set in the constructor from filteredTools(config)

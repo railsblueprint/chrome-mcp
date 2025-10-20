@@ -49,8 +49,9 @@ export class RelayConnection {
   onclose?: () => void;
   onStealthModeSet?: (stealth: boolean) => void;
   onTabConnected?: (tabId: number) => void;
+  onProjectConnected?: (projectName: string) => void;
 
-  constructor(ws: WebSocket) {
+  constructor(ws: WebSocket, browserName: string) {
     this._debuggee = { };
     this._tabPromise = new Promise(resolve => this._tabPromiseResolve = resolve);
     this._ws = ws;
@@ -61,6 +62,18 @@ export class RelayConnection {
     this._detachListener = this._onDebuggerDetach.bind(this);
     chrome.debugger.onEvent.addListener(this._eventListener);
     chrome.debugger.onDetach.addListener(this._detachListener);
+
+    // Send handshake with browser name
+    this._sendHandshake(browserName);
+  }
+
+  private _sendHandshake(browserName: string): void {
+    this._sendMessage({
+      method: 'extension_handshake',
+      params: {
+        name: browserName
+      }
+    });
   }
 
   // Either setTabId or close is called after creating the connection.
@@ -407,8 +420,6 @@ export class RelayConnection {
 
     // Store and notify about stealth mode
     this._stealthMode = stealth;
-    debugLog('_selectTab: Setting stealth mode to:', stealth, 'callback exists:', !!this.onStealthModeSet);
-    console.error('[RelayConnection] _selectTab: stealth =', stealth, 'sending setStealthMode with params:', { stealthMode: stealth });
 
     // Send stealth mode to CDP relay (for Playwright-level patches)
     this._sendMessage({
@@ -458,8 +469,6 @@ export class RelayConnection {
 
     // Store and notify about stealth mode
     this._stealthMode = stealth;
-    debugLog('_createTab: Setting stealth mode to:', stealth, 'callback exists:', !!this.onStealthModeSet);
-    console.error('[RelayConnection] _createTab: stealth =', stealth, 'sending setStealthMode with params:', { stealthMode: stealth });
 
     // Send stealth mode to CDP relay (for Playwright-level patches)
     this._sendMessage({

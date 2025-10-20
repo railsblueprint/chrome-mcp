@@ -15,6 +15,7 @@
  */
 
 import { RelayConnection, debugLog } from './relayConnection';
+import { getUserInfoFromStorage, getDefaultBrowserName } from './utils/jwt';
 
 type PageMessage = {
   type: 'connectToMCPRelay';
@@ -42,6 +43,7 @@ class TabShareExtension {
   private _activeConnection: RelayConnection | undefined;
   private _connectedTabId: number | null = null;
   private _stealthMode: boolean | null = null; // null = N/A, true = On, false = Off
+  private _projectName: string | null = null; // Connected project name
   private _pendingTabSelection = new Map<number, { connection: RelayConnection, timerId?: number }>();
   private _autoConnecting: boolean = false;
   private _autoConnectAttempts: number = 0;
@@ -63,8 +65,7 @@ class TabShareExtension {
       }
     });
 
-    // FORCE GRAY ICON IMMEDIATELY
-    console.error('[Background] Constructor: forcing gray icon immediately');
+    // Set initial gray icon
     this._updateGlobalIcon(false);
 
     // Auto-connect to MCP server on startup (will set icon based on connection result)
@@ -79,25 +80,30 @@ class TabShareExtension {
 
     this._autoConnecting = true;
 
-    // Get port from settings
-    const port = await new Promise<string>((resolve) => {
-      chrome.storage.local.get(['mcpPort'], (result) => {
-        resolve(result.mcpPort || '5555');
-      });
-    });
+    // Check if user has PRO account with connection URL
+    const userInfo = await getUserInfoFromStorage();
+    let mcpRelayUrl: string;
 
-    const mcpRelayUrl = `ws://127.0.0.1:${port}/extension`;
-    debugLog('Auto-connecting to MCP server at ' + mcpRelayUrl);
+    if (userInfo && userInfo.connectionUrl) {
+      // PRO user: use connection URL from JWT token
+      mcpRelayUrl = userInfo.connectionUrl;
+    } else {
+      // Free user: use local port
+      const port = await new Promise<string>((resolve) => {
+        chrome.storage.local.get(['mcpPort'], (result) => {
+          resolve(result.mcpPort || '5555');
+        });
+      });
+      mcpRelayUrl = `ws://127.0.0.1:${port}/extension`;
+    }
     try {
       await this._connectToRelay(0, mcpRelayUrl);
       // Connect in lazy mode (no specific tab, tab will be selected on first command)
       await this._connectTab(0, undefined, undefined, mcpRelayUrl);
-      debugLog('Auto-connection successful');
       this._autoConnecting = false;
       await this._updateGlobalIcon(true);
       this._broadcastStatusChange();
     } catch (error: any) {
-      debugLog('Auto-connection failed: ' + error.message);
       this._autoConnecting = false;
       await this._updateGlobalIcon(false);
       // Retry after 1 second
@@ -140,7 +146,8 @@ class TabShareExtension {
         sendResponse({
           connectedTabId: this._connectedTabId,
           connected: this._activeConnection !== undefined,
-          stealthMode: this._stealthMode
+          stealthMode: this._stealthMode,
+          projectName: this._projectName
         });
         return false;
       case 'disconnect':
@@ -149,21 +156,17 @@ class TabShareExtension {
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true;
       case 'loginSuccess':
-        debugLog('Login success received, saving tokens...');
         chrome.storage.local.set({
           accessToken: message.accessToken,
           refreshToken: message.refreshToken,
           isPro: true
         }, () => {
-          debugLog('Tokens saved to storage');
           sendResponse({ success: true });
         });
         return true;
       case 'focusTab':
-        debugLog('Focus tab request received from tab:', sender.tab?.id);
         if (sender.tab?.id) {
           chrome.tabs.update(sender.tab.id, { active: true }, () => {
-            debugLog('Tab focused successfully');
             sendResponse({ success: true });
           });
         } else {
@@ -181,7 +184,12 @@ class TabShareExtension {
         throw new Error('Extension is disabled. Please enable it from the extension popup.');
       }
 
-      debugLog(`Connecting to relay at ${mcpRelayUrl}`);
+      // Get browser name from storage
+      const browserName = await new Promise<string>((resolve) => {
+        chrome.storage.local.get(['browserName'], (result) => {
+          resolve(result.browserName || getDefaultBrowserName());
+        });
+      });
 
       const socket = new WebSocket(mcpRelayUrl);
       await new Promise<void>((resolve, reject) => {
@@ -195,34 +203,30 @@ class TabShareExtension {
         setTimeout(() => reject(new Error('Connection timeout')), 2000);
       });
 
-      const connection = new RelayConnection(socket);
+      const connection = new RelayConnection(socket, browserName);
       connection.onclose = () => {
-        debugLog('Connection closed');
         this._pendingTabSelection.delete(selectorTabId);
-        // TODO: show error in the selector tab?
       };
       connection.onStealthModeSet = (stealth: boolean) => {
-        debugLog('Stealth mode set:', stealth);
-        console.error('[Background] Stealth mode set to:', stealth); // Force visible log
         this._stealthMode = stealth;
         this._broadcastStatusChange();
       };
+      connection.onProjectConnected = (projectName: string) => {
+        this._projectName = projectName;
+        this._broadcastStatusChange();
+      };
       this._pendingTabSelection.set(selectorTabId, { connection });
-      debugLog(`Connected to MCP relay`);
     } catch (error: any) {
-      const message = `Failed to connect to MCP relay: ${error.message}`;
-      debugLog(message);
-      throw new Error(message);
+      throw new Error(`Failed to connect to MCP relay: ${error.message}`);
     }
   }
 
   private async _connectTab(selectorTabId: number, tabId: number | undefined, windowId: number | undefined, mcpRelayUrl: string): Promise<void> {
     try {
-      debugLog(`Connecting to relay at ${mcpRelayUrl} (lazy mode: ${!tabId})`);
       try {
         this._activeConnection?.close('Another connection is requested');
       } catch (error: any) {
-        debugLog(`Error closing active connection:`, error);
+        // Ignore errors when closing previous connection
       }
       await this._setConnectedTabId(null);
 
@@ -233,8 +237,6 @@ class TabShareExtension {
 
       // Set up stealth mode callback for active connection
       this._activeConnection.onStealthModeSet = (stealth: boolean) => {
-        debugLog('Stealth mode set on active connection:', stealth);
-        console.error('[Background] Stealth mode set on active connection to:', stealth); // Force visible log
         this._stealthMode = stealth;
         // Update badge to reflect stealth mode
         if (this._connectedTabId) {
@@ -243,9 +245,14 @@ class TabShareExtension {
         this._broadcastStatusChange();
       };
 
+      // Set up project connection callback
+      this._activeConnection.onProjectConnected = (projectName: string) => {
+        this._projectName = projectName;
+        this._broadcastStatusChange();
+      };
+
       // Set up tab connection callback
       this._activeConnection.onTabConnected = (tabId: number) => {
-        debugLog('Tab connected:', tabId);
         void this._setConnectedTabId(tabId);
         void this._updateGlobalIcon(true);
         this._broadcastStatusChange();
@@ -266,20 +273,17 @@ class TabShareExtension {
       }
 
       this._activeConnection.onclose = () => {
-        debugLog('MCP connection closed, will auto-reconnect...');
         this._activeConnection = undefined;
         this._stealthMode = null;
+        this._projectName = null;
         void this._setConnectedTabId(null);
         void this._updateGlobalIcon(false);
         this._broadcastStatusChange();
         // Auto-reconnect after connection loss
         setTimeout(() => this._autoConnect(), 1000);
       };
-
-      debugLog(`Connected to MCP bridge (lazy mode: ${!tabId})`);
     } catch (error: any) {
       await this._setConnectedTabId(null);
-      debugLog(`Failed to connect:`, error.message);
       throw error;
     }
   }
@@ -314,7 +318,6 @@ class TabShareExtension {
 
   private async _updateGlobalIcon(connected: boolean): Promise<void> {
     try {
-      console.error('[Background] _updateGlobalIcon called with connected:', connected);
       const iconPath = connected ? {
         "16": "/icons/icon-16.png",
         "32": "/icons/icon-32.png",
@@ -326,12 +329,9 @@ class TabShareExtension {
         "48": "/icons/icon-48-gray.png",
         "128": "/icons/icon-128-gray.png"
       };
-      console.error('[Background] Setting icon to:', connected ? 'COLOR' : 'GRAY');
       await chrome.action.setIcon({ path: iconPath });
-      console.error('[Background] Icon updated successfully');
     } catch (error: any) {
-      console.error('[Background] Failed to update icon:', error);
-      debugLog('Failed to update icon:', error.message);
+      // Silently ignore icon update errors
     }
   }
 
@@ -385,6 +385,7 @@ class TabShareExtension {
     this._activeConnection?.close('User disconnected');
     this._activeConnection = undefined;
     this._stealthMode = null; // Reset to N/A when disconnecting
+    this._projectName = null; // Reset project name
     await this._setConnectedTabId(null);
     await this._updateGlobalIcon(false);
     this._broadcastStatusChange();
@@ -396,16 +397,19 @@ class TabShareExtension {
       type: 'statusChanged',
       connectedTabId: this._connectedTabId,
       connected: this._activeConnection !== undefined,
-      stealthMode: this._stealthMode
+      stealthMode: this._stealthMode,
+      projectName: this._projectName
     }).catch(() => {
       // Ignore errors if no listeners (popup might be closed)
     });
   }
 
   private _onStorageChanged(changes: { [key: string]: chrome.storage.StorageChange }, areaName: string): void {
-    if (areaName === 'local' && changes.extensionEnabled) {
+    if (areaName !== 'local') return;
+
+    // Handle extension enabled/disabled
+    if (changes.extensionEnabled) {
       const isEnabled = changes.extensionEnabled.newValue !== false;
-      debugLog('Extension enabled changed to:', isEnabled);
       // Update icon based on enabled state AND connection state
       const isConnected = this._activeConnection !== undefined;
       void this._updateGlobalIcon(isEnabled && isConnected);
@@ -414,6 +418,23 @@ class TabShareExtension {
       if (!isEnabled && this._activeConnection) {
         void this._disconnect();
       }
+    }
+
+    // Handle authentication status changes (login/logout)
+    if (changes.accessToken || changes.refreshToken || changes.isPro) {
+      // Disconnect current connection if any
+      if (this._activeConnection) {
+        this._activeConnection.close('Authentication status changed');
+        this._activeConnection = undefined;
+        this._stealthMode = null;
+        this._projectName = null;
+        void this._setConnectedTabId(null);
+        void this._updateGlobalIcon(false);
+      }
+      // Reconnect with new authentication status
+      setTimeout(() => {
+        void this._autoConnect();
+      }, 500); // Small delay to ensure storage is fully updated
     }
   }
 }
