@@ -26,20 +26,59 @@ MCP Client <--JSON-RPC--> Proxy Server <--JSON-RPC--> Browser Extension
    - **Extension**: ALWAYS passive (server) - only responds to requests, never initiates
    - **MCP Client**: ALWAYS active (client) - initiates all requests
    - **Proxy**: Router - responds to control methods, forwards tool methods
-3. **ID Namespacing**: Different ID formats prevent collisions in bidirectional forwarding
-4. **Stateful Connections**: WebSocket connections maintain authentication state
+3. **ID Mapping**: Proxy maps request IDs to prevent collisions when multiple MCPs connect to same extension
+   - MCP sends: `{"id": 1, ...}`
+   - Proxy forwards: `{"id": "conn-A:1", ...}` (adds connectionId prefix)
+   - Extension responds: `{"id": "conn-A:1", ...}` (preserves mapped ID)
+   - Proxy unmaps: `{"id": 1, ...}` (removes prefix before sending to MCP)
+4. **Backward Compatible**: Extension can detect direct mode vs proxy mode by ID format
+5. **Stateful Connections**: WebSocket connections maintain authentication state
 
-## ID Format Requirements
+## ID Format Requirements and Mapping
 
-**CRITICAL**: To prevent ID collisions during message forwarding, the following ID formats MUST be used:
+### MCP Client IDs
+- **Format**: Unprefixed number or UUID
+- **Examples**: `1`, `2`, `3`, `"550e8400-e29b-41d4-a716-446655440000"`
+- **No changes needed**: Works in both direct and proxy modes
 
-| Sender | ID Format | Example | Notes |
-|--------|-----------|---------|-------|
-| MCP Client | Unprefixed number or UUID | `1`, `2`, `"550e8400-..."` | Any format except "ext:" or "proxy:" prefix |
-| Browser Extension | String with `"ext:"` prefix | `"ext:1"`, `"ext:2"` | MUST prefix all client-initiated request IDs |
-| Proxy Server | String with `"proxy:"` prefix | `"proxy:1"`, `"proxy:auth"` | MUST prefix all server-initiated request IDs |
+### Proxy Server IDs
+- **Format**: String with `"proxy:"` prefix
+- **Examples**: `"proxy:1"`, `"proxy:auth"`
+- **Usage**: Only for proxy-initiated requests (e.g., authenticate)
 
-**Rationale**: When proxy forwards MCP requests to Extension, both use the same WebSocket. Without namespacing, MCP's `id:1` could collide with Extension's `id:1`.
+### ID Mapping by Proxy
+
+When forwarding MCP requests to Extension, proxy MUST map IDs to prevent collisions:
+
+**Problem**: Multiple MCPs can send same ID
+```
+MCP-A sends: {"id": 1, "method": "navigate", ...}
+MCP-B sends: {"id": 1, "method": "click", ...}  ← Collision!
+```
+
+**Solution**: Proxy prefixes IDs with connectionId
+```
+MCP-A → Proxy:
+  {"id": 1, "method": "navigate", "connectionId": "conn-abc"}
+
+Proxy → Extension (maps ID):
+  {"id": "conn-abc:1", "method": "navigate"}
+
+Extension → Proxy:
+  {"id": "conn-abc:1", "result": {...}}
+
+Proxy → MCP-A (unmaps ID):
+  {"id": 1, "result": {...}}
+```
+
+### Extension ID Parsing
+
+Extension detects mode by ID format:
+- **Direct mode**: Numeric ID (`1`, `2`, `3`) - single MCP connection
+- **Proxy mode**: String with `:` separator (`"conn-abc:1"`) - multiple MCP connections
+- **Proxy control**: String with `"proxy:"` prefix (`"proxy:1"`) - proxy-initiated requests
+
+Extension ALWAYS responds with the SAME ID it received (never generates new IDs).
 
 ## Connection Phase
 
@@ -320,14 +359,233 @@ Notifications do not require responses and have **no `id` field**.
 
 ## Control Methods
 
-Methods handled directly by the proxy (not forwarded):
+Methods handled directly by the proxy (not forwarded to extension):
 
-| Method | Direction | Description |
-|--------|-----------|-------------|
-| `authenticate` | Proxy → Client | Request authentication credentials (initiated by proxy) |
-| `list_extensions` | Client → Proxy | Get list of available extensions |
-| `connect` | Client → Proxy | Establish connection to specific extension |
-| `disconnect` | Client → Proxy | Close connection to extension |
+### 1. authenticate (Proxy → Extension)
+
+**Request:**
+```json
+Proxy → Extension:
+{
+  "jsonrpc": "2.0",
+  "id": "proxy:1",
+  "method": "authenticate",
+  "params": {}
+}
+```
+
+**Response:**
+```json
+Extension → Proxy:
+{
+  "jsonrpc": "2.0",
+  "id": "proxy:1",
+  "result": {
+    "name": "Chrome 141",
+    "accessToken": "eyJhbGciOiJIUzI1NiJ9..."
+  }
+}
+```
+
+**Fields:**
+- `name` (string, required): Browser name/identifier shown to users
+- `accessToken` (string, required): JWT token for authentication
+
+**Errors:**
+- Invalid token → Connection closed by proxy
+
+---
+
+### 2. mcp_handshake (MCP → Proxy)
+
+**Request:**
+```json
+MCP → Proxy:
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "mcp_handshake",
+  "params": {
+    "accessToken": "eyJhbGciOiJIUzI1NiJ9..."
+  }
+}
+```
+
+**Response (Success):**
+```json
+Proxy → MCP:
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "authenticated": true,
+    "user_id": "83898119-db4f-4848-9d27-ea328b73a4df",
+    "mcp_client_id": "mcp-82f7a8c6-b7f3-4ced-a759-27cb08f59619"
+  }
+}
+```
+
+**Response (Error):**
+```json
+Proxy → MCP:
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32000,
+    "message": "Authentication failed: Invalid token"
+  }
+}
+```
+
+**Fields:**
+- `accessToken` (string, required): JWT token containing user_id and connection_url
+
+---
+
+### 3. list_extensions (MCP → Proxy)
+
+**Request:**
+```json
+MCP → Proxy:
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "list_extensions",
+  "params": {}
+}
+```
+
+**Response:**
+```json
+Proxy → MCP:
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "extensions": [
+      {
+        "id": "ext-d1cdb70b-b20a-46ed-8fa7-7597a0f2837a",
+        "name": "Chrome 141",
+        "connected": true
+      },
+      {
+        "id": "ext-a2b3c4d5-e6f7-8901-2345-6789abcdef01",
+        "name": "Chrome 140",
+        "connected": true
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+- `extensions` (array, required): List of available browser extensions
+  - `id` (string): Unique extension identifier (use for connect)
+  - `name` (string): Browser name shown to user
+  - `connected` (boolean): Whether extension is currently connected
+
+**Notes:**
+- Only returns extensions belonging to authenticated user
+- Empty array if no extensions connected
+
+---
+
+### 4. connect (MCP → Proxy)
+
+**Request:**
+```json
+MCP → Proxy:
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "connect",
+  "params": {
+    "extension_id": "ext-d1cdb70b-b20a-46ed-8fa7-7597a0f2837a"
+  }
+}
+```
+
+**Response (Success):**
+```json
+Proxy → MCP:
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "connection_id": "conn-70dfcdd7-ff5e-448e-b274-59c1f6a0d7c8",
+    "extension_id": "ext-d1cdb70b-b20a-46ed-8fa7-7597a0f2837a",
+    "extension_name": "Chrome 141"
+  }
+}
+```
+
+**Response (Error - Extension not found):**
+```json
+Proxy → MCP:
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "error": {
+    "code": -32000,
+    "message": "Extension not found or not accessible"
+  }
+}
+```
+
+**Response (Error - Already connected):**
+```json
+Proxy → MCP:
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "error": {
+    "code": -32001,
+    "message": "MCP client already connected to an extension"
+  }
+}
+```
+
+**Fields:**
+- `extension_id` (string, required): Extension ID from list_extensions
+- `connection_id` (string): Unique connection identifier (use in subsequent tool calls)
+
+**Notes:**
+- MCP client can only connect to ONE extension at a time
+- To switch extensions, disconnect first, then connect to another
+- Multiple MCP clients can connect to same extension (different tabs)
+
+---
+
+### 5. disconnect (MCP → Proxy)
+
+**Request:**
+```json
+MCP → Proxy:
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "disconnect",
+  "params": {}
+}
+```
+
+**Response:**
+```json
+Proxy → MCP:
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "result": {
+    "disconnected": true
+  }
+}
+```
+
+**Notes:**
+- Closes current connection to extension
+- Does NOT close MCP WebSocket (can connect to another extension)
+- Safe to call even if not connected (returns success)
 
 ## Forwarded Methods
 
