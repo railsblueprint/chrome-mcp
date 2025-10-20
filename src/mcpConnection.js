@@ -64,7 +64,7 @@ class MCPConnection {
       const firstExtension = extensionsResult.extensions[0];
       debugLog('Connecting to extension:', firstExtension.id);
 
-      const connectResult = await this.sendRequest('connect', { extensionId: firstExtension.id });
+      const connectResult = await this.sendRequest('connect', { extension_id: firstExtension.id });
       this._connectionId = connectResult.connection_id;
       debugLog('Connected to extension:', firstExtension.name, 'connectionId:', this._connectionId);
     }
