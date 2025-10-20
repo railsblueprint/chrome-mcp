@@ -51,7 +51,7 @@ export class RelayConnection {
   onTabConnected?: (tabId: number) => void;
   onProjectConnected?: (projectName: string) => void;
 
-  constructor(ws: WebSocket, browserName: string) {
+  constructor(ws: WebSocket, browserName: string, accessToken?: string) {
     this._debuggee = { };
     this._tabPromise = new Promise(resolve => this._tabPromiseResolve = resolve);
     this._ws = ws;
@@ -63,16 +63,25 @@ export class RelayConnection {
     chrome.debugger.onEvent.addListener(this._eventListener);
     chrome.debugger.onDetach.addListener(this._detachListener);
 
-    // Send handshake with browser name
-    this._sendHandshake(browserName);
+    // Send handshake with browser name and optional access token
+    this._sendHandshake(browserName, accessToken);
   }
 
-  private _sendHandshake(browserName: string): void {
+  private _sendHandshake(browserName: string, accessToken?: string): void {
+    const params: any = {
+      name: browserName
+    };
+
+    if (accessToken) {
+      params.accessToken = accessToken;
+      debugLog('[Extension] Sending handshake with access token');
+    } else {
+      debugLog('[Extension] Sending handshake without access token (not authenticated)');
+    }
+
     this._sendMessage({
       method: 'extension_handshake',
-      params: {
-        name: browserName
-      }
+      params
     });
   }
 

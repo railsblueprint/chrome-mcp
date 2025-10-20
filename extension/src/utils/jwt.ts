@@ -66,6 +66,47 @@ export async function getUserInfoFromStorage(): Promise<{ email: string; connect
 }
 
 /**
+ * Check if token will expire soon (within specified minutes)
+ * @param token JWT access token
+ * @param minutesBeforeExpiry How many minutes before expiry to consider "soon" (default: 5)
+ * @returns true if token expires within the specified time
+ */
+export function isTokenExpiringSoon(token: string, minutesBeforeExpiry: number = 5): boolean {
+  const claims = decodeJWT(token);
+  if (!claims || !claims.exp) {
+    return true; // Treat invalid token as expired
+  }
+
+  const expiryTime = claims.exp * 1000; // Convert to milliseconds
+  const now = Date.now();
+  const timeUntilExpiry = expiryTime - now;
+  const refreshThreshold = minutesBeforeExpiry * 60 * 1000; // Convert minutes to ms
+
+  return timeUntilExpiry <= refreshThreshold;
+}
+
+/**
+ * Calculate milliseconds until token should be refreshed
+ * @param token JWT access token
+ * @param minutesBeforeExpiry When to refresh before expiry (default: 5)
+ * @returns milliseconds until refresh, or 0 if already should refresh
+ */
+export function getMillisecondsUntilRefresh(token: string, minutesBeforeExpiry: number = 5): number {
+  const claims = decodeJWT(token);
+  if (!claims || !claims.exp) {
+    return 0; // Refresh immediately if invalid
+  }
+
+  const expiryTime = claims.exp * 1000;
+  const now = Date.now();
+  const refreshThreshold = minutesBeforeExpiry * 60 * 1000;
+  const refreshTime = expiryTime - refreshThreshold;
+  const msUntilRefresh = refreshTime - now;
+
+  return Math.max(0, msUntilRefresh);
+}
+
+/**
  * Get default browser name with version
  */
 export function getDefaultBrowserName(): string {

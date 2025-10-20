@@ -15,7 +15,7 @@
  */
 
 import { RelayConnection, debugLog } from './relayConnection';
-import { getUserInfoFromStorage, getDefaultBrowserName } from './utils/jwt';
+import { getUserInfoFromStorage, getDefaultBrowserName, getMillisecondsUntilRefresh, decodeJWT } from './utils/jwt';
 
 type PageMessage = {
   type: 'connectToMCPRelay';
@@ -50,6 +50,7 @@ class TabShareExtension {
   private _maxAutoConnectAttempts: number = 3; // Stop auto-retrying after 3 failed attempts
   private _logs: Array<{ timestamp: number; message: string }> = [];
   private _maxLogs = 100;
+  private _tokenRefreshTimer: number | null = null;
 
   constructor() {
     chrome.tabs.onRemoved.addListener(this._onTabRemoved.bind(this));
@@ -67,6 +68,9 @@ class TabShareExtension {
 
     // Set initial gray icon
     this._updateGlobalIcon(false);
+
+    // Start token refresh monitoring
+    this._scheduleTokenRefresh();
 
     // Auto-connect to MCP server on startup (will set icon based on connection result)
     this._autoConnect();
@@ -184,10 +188,13 @@ class TabShareExtension {
         throw new Error('Extension is disabled. Please enable it from the extension popup.');
       }
 
-      // Get browser name from storage
-      const browserName = await new Promise<string>((resolve) => {
-        chrome.storage.local.get(['browserName'], (result) => {
-          resolve(result.browserName || getDefaultBrowserName());
+      // Get browser name and access token from storage
+      const { browserName, accessToken } = await new Promise<{browserName: string; accessToken?: string}>((resolve) => {
+        chrome.storage.local.get(['browserName', 'accessToken'], (result) => {
+          resolve({
+            browserName: result.browserName || getDefaultBrowserName(),
+            accessToken: result.accessToken
+          });
         });
       });
 
@@ -203,7 +210,7 @@ class TabShareExtension {
         setTimeout(() => reject(new Error('Connection timeout')), 2000);
       });
 
-      const connection = new RelayConnection(socket, browserName);
+      const connection = new RelayConnection(socket, browserName, accessToken);
       connection.onclose = () => {
         this._pendingTabSelection.delete(selectorTabId);
       };
@@ -435,6 +442,113 @@ class TabShareExtension {
       setTimeout(() => {
         void this._autoConnect();
       }, 500); // Small delay to ensure storage is fully updated
+
+      // Reschedule token refresh with new tokens
+      this._scheduleTokenRefresh();
+    }
+  }
+
+  /**
+   * Schedule token refresh based on access token expiry
+   * Refreshes 5 minutes before expiration
+   */
+  private _scheduleTokenRefresh(): void {
+    // Clear existing timer
+    if (this._tokenRefreshTimer !== null) {
+      clearTimeout(this._tokenRefreshTimer);
+      this._tokenRefreshTimer = null;
+    }
+
+    // Get access token from storage
+    chrome.storage.local.get(['accessToken'], (result) => {
+      if (!result.accessToken) {
+        debugLog('[TokenRefresh] No access token found, skipping refresh schedule');
+        return;
+      }
+
+      const msUntilRefresh = getMillisecondsUntilRefresh(result.accessToken, 5);
+
+      if (msUntilRefresh === 0) {
+        debugLog('[TokenRefresh] Token already expired or expires soon, refreshing immediately');
+        void this._refreshAccessToken();
+      } else {
+        debugLog(`[TokenRefresh] Scheduling refresh in ${Math.round(msUntilRefresh / 1000 / 60)} minutes`);
+        this._tokenRefreshTimer = setTimeout(() => {
+          debugLog('[TokenRefresh] Timer fired, refreshing token');
+          void this._refreshAccessToken();
+        }, msUntilRefresh) as unknown as number;
+      }
+    });
+  }
+
+  /**
+   * Refresh access token using refresh token
+   * Calls the auth server API and updates stored tokens
+   */
+  private async _refreshAccessToken(): Promise<void> {
+    debugLog('[TokenRefresh] Starting token refresh...');
+
+    try {
+      // Get refresh token from storage
+      const { refreshToken } = await new Promise<{ refreshToken?: string }>((resolve) => {
+        chrome.storage.local.get(['refreshToken'], (result: { refreshToken?: string }) => {
+          resolve(result);
+        });
+      });
+
+      if (!refreshToken) {
+        debugLog('[TokenRefresh] No refresh token found, cannot refresh');
+        return;
+      }
+
+      // Call auth API to refresh tokens
+      const response = await fetch('https://mcp-for-chrome.railsblueprint.com/api/v1/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        debugLog('[TokenRefresh] Failed to refresh token:', response.status, errorText);
+        // Clear tokens if refresh fails (user needs to login again)
+        await chrome.storage.local.remove(['accessToken', 'refreshToken', 'isPro']);
+        return;
+      }
+
+      // Parse JSON:API response
+      const data = await response.json();
+      const newAccessToken = data.data.attributes.access_token;
+      const newRefreshToken = data.data.attributes.refresh_token;
+
+      if (!newAccessToken || !newRefreshToken) {
+        debugLog('[TokenRefresh] Invalid response format:', data);
+        return;
+      }
+
+      // Decode new access token to check if user is PRO
+      const claims = decodeJWT(newAccessToken);
+      const isPro = !!claims?.connection_url;
+
+      // Update storage with new tokens
+      await chrome.storage.local.set({
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+        isPro: isPro
+      });
+
+      debugLog('[TokenRefresh] Token refreshed successfully');
+
+      // Schedule next refresh
+      this._scheduleTokenRefresh();
+
+    } catch (error) {
+      debugLog('[TokenRefresh] Error refreshing token:', error);
     }
   }
 }
