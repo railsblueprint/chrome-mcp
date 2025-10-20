@@ -149,7 +149,7 @@ export class RelayConnection {
   }
 
   private async _onMessageAsync(event: MessageEvent): Promise<void> {
-    let message: ProtocolCommand;
+    let message: any;
     try {
       message = JSON.parse(event.data);
     } catch (error: any) {
@@ -160,11 +160,25 @@ export class RelayConnection {
 
     debugLog('Received message:', message);
 
+    // Check if this is a notification/status message (has "type" instead of "method")
+    // Notifications don't need a response
+    if (message.type && !message.method) {
+      debugLog('Received notification:', message.type);
+      // Just log it, don't send a response
+      return;
+    }
+
+    // This is a command - must have "method" and should have "id"
+    if (!message.method) {
+      debugLog('Invalid command: missing method field');
+      return;
+    }
+
     const response: ProtocolResponse = {
       id: message.id,
     };
     try {
-      response.result = await this._handleCommand(message);
+      response.result = await this._handleCommand(message as ProtocolCommand);
     } catch (error: any) {
       debugLog('Error handling command:', error);
       response.error = error.message;

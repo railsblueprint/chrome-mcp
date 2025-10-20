@@ -13,6 +13,8 @@ const { URL } = require('url');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const lockfile = require('proper-lockfile');
+const envPaths = require('env-paths');
 
 // Helper function for debug logging
 function debugLog(...args) {
@@ -21,14 +23,23 @@ function debugLog(...args) {
   }
 }
 
-// Configuration
-const TOKEN_FILE = path.join(os.homedir(), '.chrome-mcp-tokens.json');
+// Configuration - Use platform-specific config directory
+// Windows: %APPDATA%\chrome-mcp\tokens.json (e.g., C:\Users\Username\AppData\Roaming\chrome-mcp\tokens.json)
+// macOS: ~/Library/Preferences/chrome-mcp/tokens.json
+// Linux: ~/.config/chrome-mcp/tokens.json
+const paths = envPaths('chrome-mcp', { suffix: '' });
+const CONFIG_DIR = paths.config;
+const TOKEN_FILE = path.join(CONFIG_DIR, 'tokens.json');
 
 class OAuth2Client {
   constructor(config) {
     this.authBaseUrl = config.authBaseUrl || 'https://mcp-for-chrome.railsblueprint.com';
     this.callbackServer = null;
     this.callbackPort = null;
+    this.tokenRefreshTimer = null;
+
+    // Start token refresh monitoring
+    this.scheduleTokenRefresh();
   }
 
   /**
@@ -59,6 +70,9 @@ class OAuth2Client {
 
     // Store tokens
     await this._storeTokens(tokens);
+
+    // Schedule token refresh after successful authentication
+    this.scheduleTokenRefresh();
 
     return tokens;
   }
@@ -158,6 +172,184 @@ class OAuth2Client {
     } catch (error) {
       debugLog('Error extracting user info from token:', error);
       return null;
+    }
+  }
+
+  /**
+   * Calculate milliseconds until token should be refreshed
+   * @param {string} token - JWT access token
+   * @param {number} minutesBeforeExpiry - When to refresh before expiry (default: 5)
+   * @returns {number} - Milliseconds until refresh, or 0 if already should refresh
+   */
+  _getMillisecondsUntilRefresh(token, minutesBeforeExpiry = 5) {
+    const claims = this._decodeJWT(token);
+    if (!claims || !claims.exp) {
+      return 0; // Refresh immediately if invalid
+    }
+
+    const expiryTime = claims.exp * 1000; // Convert to milliseconds
+    const now = Date.now();
+    const refreshThreshold = minutesBeforeExpiry * 60 * 1000; // Convert minutes to ms
+    const refreshTime = expiryTime - refreshThreshold;
+    const msUntilRefresh = refreshTime - now;
+
+    // Add randomization (0-60 seconds) to avoid thundering herd
+    const randomDelay = Math.floor(Math.random() * 60 * 1000);
+
+    return Math.max(0, msUntilRefresh + randomDelay);
+  }
+
+  /**
+   * Schedule token refresh based on access token expiry
+   * Refreshes 5 minutes before expiration (with random delay)
+   */
+  async scheduleTokenRefresh() {
+    // Clear existing timer
+    if (this.tokenRefreshTimer !== null) {
+      clearTimeout(this.tokenRefreshTimer);
+      this.tokenRefreshTimer = null;
+    }
+
+    // Get stored tokens
+    const tokens = await this.getStoredTokens();
+    if (!tokens || !tokens.accessToken) {
+      debugLog('[TokenRefresh] No access token found, skipping refresh schedule');
+      return;
+    }
+
+    const msUntilRefresh = this._getMillisecondsUntilRefresh(tokens.accessToken, 5);
+
+    if (msUntilRefresh === 0) {
+      debugLog('[TokenRefresh] Token already expired or expires soon, refreshing immediately');
+      await this.refreshTokens();
+    } else {
+      const minutesUntilRefresh = Math.round(msUntilRefresh / 1000 / 60);
+      debugLog(`[TokenRefresh] Scheduling refresh in ${minutesUntilRefresh} minutes`);
+      this.tokenRefreshTimer = setTimeout(() => {
+        debugLog('[TokenRefresh] Timer fired, refreshing token');
+        this.refreshTokens().catch(error => {
+          debugLog('[TokenRefresh] Error in scheduled refresh:', error);
+        });
+      }, msUntilRefresh);
+    }
+  }
+
+  /**
+   * Refresh access token using refresh token
+   * Uses file locking to prevent race conditions with multiple instances
+   * @param {number} retryCount - Current retry attempt (internal use)
+   * @returns {Promise<void>}
+   */
+  async refreshTokens(retryCount = 0) {
+    debugLog('[TokenRefresh] Starting token refresh...');
+
+    let release = null;
+
+    try {
+      // Ensure token file exists before locking
+      if (!fs.existsSync(TOKEN_FILE)) {
+        debugLog('[TokenRefresh] Token file does not exist, cannot refresh');
+        return;
+      }
+
+      // Try to acquire lock with timeout
+      try {
+        debugLog('[TokenRefresh] Acquiring file lock...');
+        release = await lockfile.lock(TOKEN_FILE, {
+          retries: {
+            retries: 3,
+            minTimeout: 1000,
+            maxTimeout: 5000
+          }
+        });
+        debugLog('[TokenRefresh] Lock acquired');
+      } catch (lockError) {
+        debugLog('[TokenRefresh] Failed to acquire lock:', lockError.message);
+
+        // Retry if this is not the last attempt
+        if (retryCount < 2) {
+          const delay = 5000 + Math.floor(Math.random() * 5000); // 5-10 seconds
+          debugLog(`[TokenRefresh] Retrying in ${delay}ms (attempt ${retryCount + 1}/2)`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return this.refreshTokens(retryCount + 1);
+        }
+
+        debugLog('[TokenRefresh] Max retries reached, giving up');
+        return;
+      }
+
+      // Re-read tokens to check if another instance already refreshed
+      const currentTokens = await this.getStoredTokens();
+      if (!currentTokens || !currentTokens.refreshToken) {
+        debugLog('[TokenRefresh] No refresh token found after acquiring lock');
+        return;
+      }
+
+      // Check if token is still stale (another instance might have refreshed)
+      const msUntilRefresh = this._getMillisecondsUntilRefresh(currentTokens.accessToken, 5);
+      if (msUntilRefresh > 60000) { // More than 1 minute until refresh
+        debugLog('[TokenRefresh] Token was already refreshed by another instance, skipping');
+        return;
+      }
+
+      // Perform the refresh
+      debugLog('[TokenRefresh] Calling refresh API...');
+      const response = await fetch(`${this.authBaseUrl}/api/v1/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          grant_type: 'refresh_token',
+          refresh_token: currentTokens.refreshToken
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        debugLog('[TokenRefresh] Failed to refresh token:', response.status, errorText);
+
+        // Clear tokens if refresh fails (user needs to login again)
+        if (response.status === 401 || response.status === 403) {
+          debugLog('[TokenRefresh] Clearing invalid tokens');
+          await this.clearTokens();
+        }
+        return;
+      }
+
+      // Parse JSON:API response
+      const data = await response.json();
+      const newAccessToken = data.data?.attributes?.access_token;
+      const newRefreshToken = data.data?.attributes?.refresh_token;
+
+      if (!newAccessToken || !newRefreshToken) {
+        debugLog('[TokenRefresh] Invalid response format:', data);
+        return;
+      }
+
+      // Store new tokens
+      await this._storeTokens({
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken
+      });
+
+      debugLog('[TokenRefresh] Token refreshed successfully');
+
+    } catch (error) {
+      debugLog('[TokenRefresh] Error refreshing token:', error);
+    } finally {
+      // Always release lock
+      if (release) {
+        try {
+          await release();
+          debugLog('[TokenRefresh] Lock released');
+        } catch (releaseError) {
+          debugLog('[TokenRefresh] Error releasing lock:', releaseError);
+        }
+      }
+
+      // Schedule next refresh
+      await this.scheduleTokenRefresh();
     }
   }
 
@@ -364,9 +556,12 @@ class OAuth2Client {
    */
   async _storeTokens(tokens) {
     try {
+      // Ensure config directory exists
+      await fs.promises.mkdir(CONFIG_DIR, { recursive: true });
+
       const data = JSON.stringify(tokens, null, 2);
       await fs.promises.writeFile(TOKEN_FILE, data, { mode: 0o600 });
-      debugLog('Tokens stored successfully');
+      debugLog('Tokens stored successfully at', TOKEN_FILE);
     } catch (error) {
       debugLog('Error storing tokens:', error);
       throw error;

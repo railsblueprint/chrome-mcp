@@ -15,6 +15,7 @@ const playwrightPath = path.dirname(require.resolve('playwright/package.json'));
 const { BrowserServerBackend } = require(path.join(playwrightPath, 'lib/mcp/browser/browserServerBackend'));
 const { PrimaryServer } = require('./primaryServer');
 const { OAuth2Client } = require('./oauth');
+const { ProxyClientBackend } = require('./proxyClient');
 
 // Helper function for debug logging
 function debugLog(...args) {
@@ -333,18 +334,52 @@ class StatefulBackend {
     try {
       debugLog('[StatefulBackend] Connecting to remote proxy:', this._userInfo.connectionUrl);
 
-      // TODO: Implement ProxyClientBackend that connects to remote WebSocket proxy
-      // For now, return a message indicating the feature is coming soon
+      // Get stored tokens for authentication
+      const tokens = await this._oauthClient.getStoredTokens();
+      if (!tokens || !tokens.accessToken) {
+        throw new Error('No access token found - please authenticate first');
+      }
+
+      // Create and initialize ProxyClientBackend
+      const proxyBackend = new ProxyClientBackend(
+        this._userInfo.connectionUrl,
+        tokens.accessToken
+      );
+
+      await proxyBackend.initialize(this._server, this._clientInfo);
+
+      debugLog('[StatefulBackend] Successfully connected to proxy, listing extensions...');
+
+      // List available extensions
+      const extensionsResult = await proxyBackend.listExtensions();
+      debugLog('[StatefulBackend] Available extensions:', extensionsResult);
+
+      if (!extensionsResult || !extensionsResult.extensions || extensionsResult.extensions.length === 0) {
+        throw new Error('No browser extensions are connected to the proxy. Please connect a browser extension first.');
+      }
+
+      // Auto-connect to the first extension
+      const firstExtension = extensionsResult.extensions[0];
+      debugLog('[StatefulBackend] Auto-connecting to extension:', firstExtension.id, firstExtension.name);
+
+      const connectResult = await proxyBackend.connectToExtension(firstExtension.id);
+      debugLog('[StatefulBackend] Connected to extension:', connectResult);
+
+      // Store as active backend
+      this._activeBackend = proxyBackend;
+      this._state = 'connected';
+
+      debugLog('[StatefulBackend] Successfully connected to proxy and extension');
 
       return {
         content: [{
           type: 'text',
-          text: `### 🚧 Proxy Mode (Coming Soon)\n\n` +
-                `**Connection URL:** ${this._userInfo.connectionUrl}\n` +
-                `**Email:** ${this._userInfo.email}\n\n` +
-                `Remote proxy mode is under development. For now, please use standalone mode by logging out first.`
-        }],
-        isError: true
+          text: `### ✅ Connected to Proxy\n\n` +
+                `**Email:** ${this._userInfo.email}\n` +
+                `**Proxy:** ${this._userInfo.connectionUrl}\n` +
+                `**Browser:** ${firstExtension.name}\n\n` +
+                `Your Chrome browser is now accessible via the remote proxy. You can use all MCP tools.`
+        }]
       };
     } catch (error) {
       debugLog('[StatefulBackend] Failed to connect to proxy:', error);
