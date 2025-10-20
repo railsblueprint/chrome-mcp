@@ -43,9 +43,8 @@ class OAuth2Client {
     debugLog('Callback server started at', callbackUrl);
 
     // Build authorization URL
-    const authUrl = `${this.authBaseUrl}/oauth/authorize?` +
-      `callback_url=${encodeURIComponent(callbackUrl)}&` +
-      `response_type=code`;
+    const authUrl = `${this.authBaseUrl}/mcp/login?` +
+      `callback_url=${encodeURIComponent(callbackUrl)}`;
 
     debugLog('Opening browser to:', authUrl);
 
@@ -137,81 +136,113 @@ class OAuth2Client {
    * @returns {Promise<string>} - Callback URL
    */
   async _startCallbackServer() {
-    return new Promise((resolve, reject) => {
-      this.callbackPromise = { resolve: null, reject: null };
+    this.callbackPromise = { resolve: null, reject: null };
 
-      this.callbackServer = http.createServer((req, res) => {
-        const url = new URL(req.url, `http://localhost:${this.callbackPort}`);
+    this.callbackServer = http.createServer((req, res) => {
+      const url = new URL(req.url, `http://localhost:${this.callbackPort}`);
 
-        if (url.pathname === '/callback') {
-          debugLog('Received OAuth callback');
+      if (url.pathname === '/callback') {
+        debugLog('Received OAuth callback');
 
-          // Extract tokens from query parameters
-          const accessToken = url.searchParams.get('access_token');
-          const refreshToken = url.searchParams.get('refresh_token');
-          const error = url.searchParams.get('error');
+        // Handle POST request (form data with tokens)
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', chunk => {
+            body += chunk.toString();
+          });
+          req.on('end', () => {
+            debugLog('POST body:', body);
+            const params = new URLSearchParams(body);
+            const accessToken = params.get('access_token');
+            const refreshToken = params.get('refresh_token');
+            const error = params.get('error');
 
-          if (error) {
-            debugLog('OAuth error:', error);
-            res.writeHead(400, { 'Content-Type': 'text/html' });
-            res.end(`
-              <html>
-                <body>
-                  <h1>Authentication Failed</h1>
-                  <p>Error: ${error}</p>
-                  <p>You can close this window.</p>
-                </body>
-              </html>
-            `);
-
-            if (this.callbackPromise.reject) {
-              this.callbackPromise.reject(new Error(`OAuth error: ${error}`));
-            }
-            return;
-          }
-
-          if (!accessToken) {
-            debugLog('No access token in callback');
-            res.writeHead(400, { 'Content-Type': 'text/html' });
-            res.end(`
-              <html>
-                <body>
-                  <h1>Authentication Failed</h1>
-                  <p>No access token received</p>
-                  <p>You can close this window.</p>
-                </body>
-              </html>
-            `);
-
-            if (this.callbackPromise.reject) {
-              this.callbackPromise.reject(new Error('No access token received'));
-            }
-            return;
-          }
-
-          // Success!
-          res.writeHead(200, { 'Content-Type': 'text/html' });
-          res.end(`
-            <html>
-              <body>
-                <h1>Authentication Successful!</h1>
-                <p>You can close this window and return to your MCP client.</p>
-                <script>
-                  setTimeout(() => window.close(), 3000);
-                </script>
-              </body>
-            </html>
-          `);
-
-          if (this.callbackPromise.resolve) {
-            this.callbackPromise.resolve({ accessToken, refreshToken });
-          }
-        } else {
-          res.writeHead(404);
-          res.end('Not found');
+            this._handleCallbackResponse(res, accessToken, refreshToken, error);
+          });
+          return;
         }
-      });
 
+        // Handle GET request (legacy, query params)
+        const accessToken = url.searchParams.get('access_token');
+        const refreshToken = url.searchParams.get('refresh_token');
+        const error = url.searchParams.get('error');
+
+        this._handleCallbackResponse(res, accessToken, refreshToken, error);
+      } else {
+        res.writeHead(404);
+        res.end('Not found');
+      }
+    });
+
+    return this._setupCallbackServer();
+  }
+
+  /**
+   * Handle OAuth callback response (shared between GET and POST)
+   */
+  _handleCallbackResponse(res, accessToken, refreshToken, error) {
+    if (error) {
+      debugLog('OAuth error:', error);
+      res.writeHead(400, { 'Content-Type': 'text/html' });
+      res.end(`
+        <html>
+          <body>
+            <h1>Authentication Failed</h1>
+            <p>Error: ${error}</p>
+            <p>You can close this window.</p>
+          </body>
+        </html>
+      `);
+
+      if (this.callbackPromise.reject) {
+        this.callbackPromise.reject(new Error(`OAuth error: ${error}`));
+      }
+      return;
+    }
+
+    if (!accessToken) {
+      debugLog('No access token in callback');
+      res.writeHead(400, { 'Content-Type': 'text/html' });
+      res.end(`
+        <html>
+          <body>
+            <h1>Authentication Failed</h1>
+            <p>No access token received</p>
+            <p>You can close this window.</p>
+          </body>
+        </html>
+      `);
+
+      if (this.callbackPromise.reject) {
+        this.callbackPromise.reject(new Error('No access token received'));
+      }
+      return;
+    }
+
+    // Success!
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`
+      <html>
+        <body>
+          <h1>Authentication Successful!</h1>
+          <p>You can close this window and return to your MCP client.</p>
+          <script>
+            setTimeout(() => window.close(), 3000);
+          </script>
+        </body>
+      </html>
+    `);
+
+    if (this.callbackPromise.resolve) {
+      this.callbackPromise.resolve({ accessToken, refreshToken });
+    }
+  }
+
+  /**
+   * Continue with startCallbackServer setup
+   */
+  _setupCallbackServer() {
+    return new Promise((resolve, reject) => {
       // Listen on random port
       this.callbackServer.listen(0, 'localhost', () => {
         this.callbackPort = this.callbackServer.address().port;
