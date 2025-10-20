@@ -178,7 +178,9 @@ export class RelayConnection {
       id: message.id,
     };
     try {
-      response.result = await this._handleCommand(message as ProtocolCommand);
+      const result = await this._handleCommand(message as ProtocolCommand);
+      // Ensure result is always set, even if undefined (for JSON-RPC compliance)
+      response.result = result !== undefined ? result : {};
     } catch (error: any) {
       debugLog('Error handling command:', error);
       response.error = error.message;
