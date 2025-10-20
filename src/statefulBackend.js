@@ -92,19 +92,19 @@ class StatefulBackend {
         inputSchema: { type: 'object', properties: {}, required: [] }
       },
       {
-        name: 'authenticate',
-        description: 'Authenticate with Blueprint MCP PRO account. Opens browser for OAuth2 login and stores authentication tokens.',
-        inputSchema: { type: 'object', properties: {}, required: [] }
-      },
-      {
-        name: 'logout',
-        description: 'Log out and clear stored authentication tokens.',
-        inputSchema: { type: 'object', properties: {}, required: [] }
-      },
-      {
-        name: 'auth_status',
-        description: 'Check authentication status and PRO account information.',
-        inputSchema: { type: 'object', properties: {}, required: [] }
+        name: 'auth',
+        description: 'Manage authentication with Blueprint MCP PRO account. Use action parameter to login, logout, or check status.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['login', 'logout', 'status'],
+              description: 'Action to perform: login (authenticate and get PRO access), logout (clear tokens), status (check current auth state)'
+            }
+          },
+          required: ['action']
+        }
       }
     ];
 
@@ -156,14 +156,8 @@ class StatefulBackend {
       case 'status':
         return await this._handleStatus();
 
-      case 'authenticate':
-        return await this._handleAuthenticate();
-
-      case 'logout':
-        return await this._handleLogout();
-
-      case 'auth_status':
-        return await this._handleAuthStatus();
+      case 'auth':
+        return await this._handleAuth(rawArguments);
     }
 
     // For browser tools, use active backend if connected, otherwise use tools backend
@@ -339,14 +333,45 @@ class StatefulBackend {
     }
   }
 
-  async _handleAuthenticate() {
-    debugLog('[StatefulBackend] Handling authenticate...');
+  async _handleAuth(args) {
+    const action = args?.action;
+
+    if (!action) {
+      return {
+        content: [{
+          type: 'text',
+          text: `### Error\n\nMissing required 'action' parameter.\n\nValid actions: login, logout, status`
+        }],
+        isError: true
+      };
+    }
+
+    switch (action) {
+      case 'login':
+        return await this._handleLogin();
+      case 'logout':
+        return await this._handleLogout();
+      case 'status':
+        return await this._handleAuthStatus();
+      default:
+        return {
+          content: [{
+            type: 'text',
+            text: `### Error\n\nInvalid action: ${action}\n\nValid actions: login, logout, status`
+          }],
+          isError: true
+        };
+    }
+  }
+
+  async _handleLogin() {
+    debugLog('[StatefulBackend] Handling login...');
 
     if (this._isAuthenticated) {
       return {
         content: [{
           type: 'text',
-          text: `### Already Authenticated\n\nYou are already logged in as: ${this._userInfo?.email || 'Unknown'}\n\nUse \`logout\` to sign out and authenticate with a different account.`
+          text: `### Already Authenticated\n\nYou are already logged in as: ${this._userInfo?.email || 'Unknown'}\n\nUse auth action='logout' to sign out and authenticate with a different account.`
         }]
       };
     }
@@ -409,7 +434,7 @@ class StatefulBackend {
       return {
         content: [{
           type: 'text',
-          text: `### Not Authenticated\n\nYou are not currently logged in.\n\nUse \`authenticate\` to sign in.`
+          text: `### Not Authenticated\n\nYou are not currently logged in.\n\nUse auth action='login' to sign in.`
         }]
       };
     }
@@ -424,7 +449,7 @@ class StatefulBackend {
       return {
         content: [{
           type: 'text',
-          text: `### ✅ Logged Out\n\nYou have been successfully logged out.\n\nUse \`authenticate\` to sign in again.`
+          text: `### ✅ Logged Out\n\nYou have been successfully logged out.\n\nUse auth action='login' to sign in again.`
         }]
       };
     } catch (error) {
@@ -441,13 +466,13 @@ class StatefulBackend {
   }
 
   async _handleAuthStatus() {
-    debugLog('[StatefulBackend] Handling auth_status...');
+    debugLog('[StatefulBackend] Handling auth status...');
 
     if (!this._isAuthenticated || !this._userInfo) {
       return {
         content: [{
           type: 'text',
-          text: `### ❌ Not Authenticated\n\nYou are not currently logged in.\n\nUse \`authenticate\` to sign in with your Blueprint MCP PRO account.`
+          text: `### ❌ Not Authenticated\n\nYou are not currently logged in.\n\nUse auth action='login' to sign in with your Blueprint MCP PRO account.`
         }]
       };
     }
