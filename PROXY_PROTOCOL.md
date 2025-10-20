@@ -22,7 +22,10 @@ MCP Client <--JSON-RPC--> Proxy Server <--JSON-RPC--> Browser Extension
 ## Protocol Design Principles
 
 1. **JSON-RPC 2.0 Compliant**: All communication follows JSON-RPC 2.0 specification
-2. **Unidirectional Requests**: Clients send requests, proxy responds (except for pass-through)
+2. **Clear Roles**:
+   - **Extension**: ALWAYS passive (server) - only responds to requests, never initiates
+   - **MCP Client**: ALWAYS active (client) - initiates all requests
+   - **Proxy**: Router - responds to control methods, forwards tool methods
 3. **ID Namespacing**: Different ID formats prevent collisions in bidirectional forwarding
 4. **Stateful Connections**: WebSocket connections maintain authentication state
 
@@ -40,36 +43,39 @@ MCP Client <--JSON-RPC--> Proxy Server <--JSON-RPC--> Browser Extension
 
 ## Connection Phase
 
-### 1. Extension Connection
+### 1. Extension Connection (Extension is Passive)
 
-**1.1. Extension Connects to Proxy**
+**1.1. Extension Connects and Waits**
 ```
 Extension → Proxy: WebSocket connection to wss://proxy.example.com/extension
 ```
+Extension does NOT send handshake. It waits passively for proxy to request auth.
 
 **1.2. Proxy Requests Authentication**
 ```json
 Proxy → Extension:
 {
   "jsonrpc": "2.0",
-  "id": "proxy:auth",
+  "id": "proxy:1",
   "method": "authenticate",
   "params": {}
 }
 ```
+Proxy initiates the authentication request using `id: "proxy:1"`.
 
-**1.3. Extension Sends Credentials**
+**1.3. Extension Responds with Credentials**
 ```json
 Extension → Proxy:
 {
   "jsonrpc": "2.0",
-  "id": "proxy:auth",
+  "id": "proxy:1",
   "result": {
     "name": "Chrome 141",
     "accessToken": "eyJhbGci..."
   }
 }
 ```
+Extension responds to proxy's request using the same `id`.
 
 **1.4. Proxy Confirms Authentication (Notification)**
 ```json
@@ -85,48 +91,45 @@ Proxy → Extension:
 ```
 Note: No `id` field = notification (no response expected)
 
-### 2. MCP Client Connection
+After this, Extension remains passive and only responds to:
+- Control requests from Proxy (if any)
+- Forwarded tool requests from MCP (via Proxy)
 
-**2.1. MCP Client Connects to Proxy**
+### 2. MCP Client Connection (MCP is Active)
+
+**2.1. MCP Client Connects**
 ```
 MCP → Proxy: WebSocket connection to wss://proxy.example.com/mcp
 ```
 
-**2.2. Proxy Requests Authentication**
-```json
-Proxy → MCP:
-{
-  "jsonrpc": "2.0",
-  "id": "proxy:auth",
-  "method": "authenticate",
-  "params": {}
-}
-```
-
-**2.3. MCP Client Sends Credentials**
+**2.2. MCP Sends Handshake**
 ```json
 MCP → Proxy:
 {
   "jsonrpc": "2.0",
-  "id": "proxy:auth",
-  "result": {
+  "id": 1,
+  "method": "mcp_handshake",
+  "params": {
     "accessToken": "eyJhbGci..."
   }
 }
 ```
+MCP initiates handshake (unlike Extension which waits for proxy).
 
-**2.4. Proxy Confirms Authentication (Notification)**
+**2.3. Proxy Responds with Authentication**
 ```json
 Proxy → MCP:
 {
   "jsonrpc": "2.0",
-  "method": "authenticated",
-  "params": {
+  "id": 1,
+  "result": {
+    "authenticated": true,
     "user_id": "83898119-db4f-4848-9d27-ea328b73a4df",
     "mcp_client_id": "mcp-82f7a8c6-b7f3-4ced-a759-27cb08f59619"
   }
 }
 ```
+Proxy responds directly (not a notification).
 
 ### 3. Extension Discovery
 
@@ -341,18 +344,37 @@ The proxy passes these through without modification (except removing `connection
 
 ## Connection Lifecycle
 
+### Extension (Passive)
 ```
-1. Client connects via WebSocket
-2. Proxy sends authenticate request with id="proxy:auth"
-3. Client responds with credentials using id="proxy:auth"
-4. Proxy validates credentials and sends authenticated notification (no id)
-5. [For MCP only] Client requests list_extensions (id=1, 2, etc.)
-6. [For MCP only] Client requests connect to extension (id=N)
-7. Proxy forwards messages bidirectionally:
-   - MCP → Proxy → Extension (removes connectionId)
-   - Extension → Proxy → MCP (adds connectionId based on mapping)
-8. Either side can close connection
-9. Proxy sends disconnected notification to other side
+1. Extension connects to proxy via WebSocket
+2. Extension waits (does NOT send handshake)
+3. Proxy sends authenticate request: {"id": "proxy:1", "method": "authenticate", ...}
+4. Extension responds with credentials: {"id": "proxy:1", "result": {...}}
+5. Proxy sends authenticated notification (no id)
+6. Extension waits for forwarded commands from MCP
+7. Extension responds to each command with same id
+```
+
+### MCP Client (Active)
+```
+1. MCP connects to proxy via WebSocket
+2. MCP sends handshake: {"id": 1, "method": "mcp_handshake", ...}
+3. Proxy responds: {"id": 1, "result": {...}}
+4. MCP requests list_extensions: {"id": 2, "method": "list_extensions", ...}
+5. Proxy responds with list: {"id": 2, "result": {...}}
+6. MCP requests connect: {"id": 3, "method": "connect", ...}
+7. Proxy responds with connection_id: {"id": 3, "result": {"connection_id": "..."}}
+8. MCP sends tool commands: {"id": 4, "method": "createTab", ..., "connectionId": "..."}
+9. Proxy forwards to Extension (removes connectionId)
+10. Extension responds: {"id": 4, "result": {...}}
+11. Proxy forwards response back to MCP: {"id": 4, "result": {...}}
+```
+
+### Disconnection
+```
+- If Extension disconnects: Proxy sends notification to MCP
+- If MCP disconnects: Connection mapping removed, Extension can serve other MCPs
+- Either side can close WebSocket at any time
 ```
 
 ## Error Codes
@@ -388,81 +410,129 @@ Standard JSON-RPC 2.0 error codes:
 
 ### For MCP Clients
 
+**Role: ALWAYS Active Client**
+- MCP initiates ALL requests
+- MCP NEVER responds to requests (except in rare control scenarios)
+- Proxy either responds directly or forwards to Extension
+
 **ID Format:**
 - Use unprefixed numeric IDs: `1`, `2`, `3...`
 - OR use UUIDs: `"550e8400-e29b-41d4-a716-446655440000"`
 - NEVER use `"ext:"` or `"proxy:"` prefixes
 
-**Connection:**
+**Connection Flow:**
 ```javascript
-// 1. Wait for proxy's authenticate request
+// 1. Connect to proxy
+ws = new WebSocket("wss://proxy.example.com/mcp");
+
+// 2. Send handshake (MCP initiates, not proxy!)
+ws.onopen = () => {
+  send({ id: 1, method: "mcp_handshake", params: { accessToken: token }});
+};
+
+// 3. Wait for handshake response
 onMessage(msg => {
-  if (msg.id === "proxy:auth" && msg.method === "authenticate") {
-    send({ id: "proxy:auth", result: { accessToken: token }});
+  if (msg.id === 1 && msg.result) {
+    // Authenticated! Can now list extensions and connect
+    send({ id: 2, method: "list_extensions", params: {}});
   }
 });
 
-// 2. Wait for authenticated notification
+// 4. Connect to extension
 onMessage(msg => {
-  if (msg.method === "authenticated") {
-    // Now can list extensions and connect
+  if (msg.id === 2 && msg.result) {
+    const extensionId = msg.result.extensions[0].id;
+    send({ id: 3, method: "connect", params: { extension_id: extensionId }});
   }
 });
 
-// 3. List and connect
-send({ id: 1, method: "list_extensions", params: {}});
-send({ id: 2, method: "connect", params: { extension_id: "ext-..." }});
+// 5. Use connection
+onMessage(msg => {
+  if (msg.id === 3 && msg.result) {
+    connectionId = msg.result.connection_id;  // Store for later
 
-// 4. Include connectionId in all forwarded commands
-send({
-  id: 3,
-  method: "createTab",
-  params: {...},
-  connectionId: "conn-..."  // From connect response
+    // Now can send tool commands
+    send({
+      id: 4,
+      method: "createTab",
+      params: { url: "..." },
+      connectionId: connectionId
+    });
+  }
 });
 ```
 
 **Key Points:**
+- MCP initiates handshake (not proxy!)
 - Always include `connectionId` in forwarded commands (after connect)
-- Handle `authenticated` and `disconnected` notifications
+- Handle `disconnected` notifications
 - Reconnect on connection loss
 - One active connection per MCP instance
 
 ### For Browser Extensions
 
-**ID Format:**
-- Use `"ext:"` prefixed IDs for any client-initiated requests: `"ext:1"`, `"ext:2"`, `"ext:3"`
-- Respond to proxy requests using the same ID proxy sent
+**Role: ALWAYS Passive Server**
+- Extension NEVER initiates requests
+- Extension ONLY responds to requests from:
+  - Proxy (e.g., authenticate request)
+  - MCP via Proxy (e.g., createTab, navigate)
+- Extension does NOT send handshake on connect - it waits for proxy's authenticate request
 
-**Connection:**
+**ID Format:**
+- Extension does NOT generate IDs (it never initiates requests)
+- Extension responds using the SAME `id` that was in the incoming request
+- If Extension needs to initiate (rare), use `"ext:"` prefix: `"ext:1"`, `"ext:2"`
+
+**Connection Flow:**
 ```javascript
-// 1. Wait for proxy's authenticate request
-onMessage(msg => {
-  if (msg.id === "proxy:auth" && msg.method === "authenticate") {
+// 1. Connect and wait (do NOT send handshake!)
+ws = new WebSocket("wss://proxy.example.com/extension");
+
+ws.onopen = () => {
+  // Do NOT send handshake! Wait for proxy to request authentication
+  console.log("Connected, waiting for proxy auth request...");
+};
+
+// 2. Respond to proxy's authenticate request
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+
+  // Proxy's auth request (id starts with "proxy:")
+  if (msg.id && msg.id.startsWith("proxy:") && msg.method === "authenticate") {
     send({
-      id: "proxy:auth",  // Same ID as request
+      id: msg.id,  // Use SAME ID from request
       result: {
         name: "Chrome 141",
-        accessToken: token
+        accessToken: getStoredToken()
       }
     });
+    return;
   }
-});
 
-// 2. Handle forwarded commands from MCP
-onMessage(msg => {
-  if (msg.id && msg.method && msg.id !== "proxy:auth") {
-    // This is a forwarded command from MCP
-    handleCommand(msg.method, msg.params).then(result => {
-      send({ id: msg.id, result: result || {} });  // ALWAYS include result
-    }).catch(error => {
-      send({ id: msg.id, error: { code: -32000, message: error.message }});
-    });
+  // Forwarded command from MCP (numeric id)
+  if (msg.id && msg.method) {
+    handleCommand(msg.method, msg.params)
+      .then(result => {
+        send({ id: msg.id, result: result || {} });  // ALWAYS include result
+      })
+      .catch(error => {
+        send({ id: msg.id, error: { code: -32000, message: error.message }});
+      });
+    return;
   }
-});
+
+  // Notification (no id) - just log
+  if (msg.method && !msg.id) {
+    console.log("Notification:", msg.method, msg.params);
+  }
+};
 ```
 
-**CRITICAL:** Never send `{"id": "..."}` alone. Always include `result` or `error`:
+**CRITICAL Rules:**
+1. **Never initiate requests** - Extension is passive, only responds
+2. **Always use same `id`** - Respond with the exact `id` from the incoming request
+3. **Never send `{"id": "..."}` alone** - Always include `result` or `error`:
+
 ```javascript
 // ✅ CORRECT
 send({ id: msg.id, result: {} });  // Empty result is valid
@@ -471,6 +541,7 @@ send({ id: msg.id, error: { code: -32000, message: "..." }});
 
 // ❌ WRONG
 send({ id: msg.id });  // Missing result/error!
+send({ id: 1, method: "handshake", ... });  // Extension should NOT send handshake!
 ```
 
 ### For Proxy Servers
