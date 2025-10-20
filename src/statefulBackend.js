@@ -76,26 +76,44 @@ class StatefulBackend {
     const connectionTools = [
       {
         name: 'connect',
-        description: 'Connect to browser extension to enable browser automation. Use browser_tabs to connect to existing tabs or create new ones with optional stealth mode.',
+        description: 'Activate browser automation by connecting to the Chrome extension. Must be called before using any browser_ tools. After connecting, use browser_tabs to select or create tabs.',
         inputSchema: {
           type: 'object',
           properties: {},
           required: []
+        },
+        annotations: {
+          title: 'Connect to browser',
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false
         }
       },
       {
         name: 'disconnect',
-        description: 'Disconnect from browser and return to passive mode.',
-        inputSchema: { type: 'object', properties: {}, required: [] }
+        description: 'Stop browser automation and close the connection to the Chrome extension. Returns server to passive mode where browser_ tools are unavailable.',
+        inputSchema: { type: 'object', properties: {}, required: [] },
+        annotations: {
+          title: 'Disconnect from browser',
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false
+        }
       },
       {
         name: 'status',
-        description: 'Get current connection status and mode.',
-        inputSchema: { type: 'object', properties: {}, required: [] }
+        description: 'Check whether browser automation is currently active or passive. Shows if connect has been called and browser_ tools are available.',
+        inputSchema: { type: 'object', properties: {}, required: [] },
+        annotations: {
+          title: 'Connection status',
+          readOnlyHint: true,
+          destructiveHint: false,
+          openWorldHint: false
+        }
       },
       {
         name: 'auth',
-        description: 'Manage authentication with Blueprint MCP PRO account. Use action parameter to login, logout, or check status.',
+        description: 'Manage Blueprint MCP PRO authentication. Login to access unlimited browser tabs, logout to clear credentials, or check current authentication status.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -106,6 +124,12 @@ class StatefulBackend {
             }
           },
           required: ['action']
+        },
+        annotations: {
+          title: 'Manage authentication',
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false
         }
       }
     ];
