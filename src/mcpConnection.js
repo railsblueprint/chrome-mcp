@@ -272,8 +272,35 @@ class MCPConnection {
 
     debugLog('Calling tool:', name, '→', command.method);
 
-    // Use longer timeout for tool calls (2 minutes)
-    return await this.sendRequest(command.method, command.params, 120000);
+    try {
+      // Use longer timeout for tool calls (2 minutes)
+      const result = await this.sendRequest(command.method, command.params, 120000);
+
+      // Wrap result in MCP format with content array
+      // MCP expects: { content: [{ type: "text", text: "..." }], isError: boolean }
+      return {
+        content: [
+          {
+            type: 'text',
+            text: '### Result\n' + JSON.stringify(result, null, 2)
+          }
+        ],
+        isError: false
+      };
+    } catch (error) {
+      debugLog('Tool call error:', error);
+
+      // Wrap error in MCP format
+      return {
+        content: [
+          {
+            type: 'text',
+            text: '### Error\n' + (error.message || String(error))
+          }
+        ],
+        isError: true
+      };
+    }
   }
 
   /**
