@@ -15,6 +15,10 @@
  * limitations under the License.
  */
 
+// Load environment variables from .env.local or .env files
+require('dotenv').config({ path: '.env.local' });
+require('dotenv').config(); // Fallback to .env if .env.local doesn't exist
+
 // Enable stealth mode patches by default (uses generic names instead of Playwright-specific ones)
 process.env.STEALTH_MODE = 'true';
 

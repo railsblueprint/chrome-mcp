@@ -104,29 +104,59 @@ class OAuth2Client {
   }
 
   /**
-   * Verify tokens with server and get user info
-   * @returns {Promise<{isPro: boolean, email: string} | null>}
+   * Decode JWT token and extract claims (without verification)
+   * @param {string} token - JWT token
+   * @returns {Object | null} - Decoded claims or null if invalid
    */
-  async verifyTokens() {
+  _decodeJWT(token) {
+    try {
+      // JWT format: header.payload.signature
+      const parts = token.split('.');
+      if (parts.length !== 3) {
+        debugLog('Invalid JWT format');
+        return null;
+      }
+
+      // Decode base64url payload (second part)
+      const payload = parts[1];
+      // Replace base64url chars with base64 chars
+      const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+      // Decode base64
+      const jsonString = Buffer.from(base64, 'base64').toString('utf8');
+
+      return JSON.parse(jsonString);
+    } catch (error) {
+      debugLog('Error decoding JWT:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get user info from stored token
+   * @returns {Promise<{email: string, connectionUrl: string} | null>}
+   */
+  async getUserInfo() {
     const tokens = await this.getStoredTokens();
     if (!tokens || !tokens.accessToken) {
       return null;
     }
 
     try {
-      // TODO: Make API call to verify token and get user info
-      // For now, just return a placeholder
-      debugLog('Verifying tokens with server...');
+      const claims = this._decodeJWT(tokens.accessToken);
 
-      // In production, this would make an API call like:
-      // const response = await fetch(`${this.authBaseUrl}/api/v1/me`, {
-      //   headers: { 'Authorization': `Bearer ${tokens.accessToken}` }
-      // });
-      // return await response.json();
+      if (!claims) {
+        debugLog('Failed to decode access token');
+        return null;
+      }
 
-      return { isPro: false, email: 'user@example.com' };
+      debugLog('Token claims:', claims);
+
+      return {
+        email: claims.email,
+        connectionUrl: claims.connection_url
+      };
     } catch (error) {
-      debugLog('Error verifying tokens:', error);
+      debugLog('Error extracting user info from token:', error);
       return null;
     }
   }

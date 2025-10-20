@@ -45,10 +45,10 @@ class StatefulBackend {
     this._isAuthenticated = await this._oauthClient.isAuthenticated();
     if (this._isAuthenticated) {
       debugLog('[StatefulBackend] Found stored authentication tokens');
-      // Verify tokens and get user info
-      this._userInfo = await this._oauthClient.verifyTokens();
+      // Decode token and get user info
+      this._userInfo = await this._oauthClient.getUserInfo();
       if (!this._userInfo) {
-        debugLog('[StatefulBackend] Token verification failed, clearing auth state');
+        debugLog('[StatefulBackend] Failed to decode token, clearing auth state');
         this._isAuthenticated = false;
         await this._oauthClient.clearTokens();
       } else {
@@ -189,20 +189,14 @@ class StatefulBackend {
 
     debugLog('[StatefulBackend] Attempting to connect...');
 
-    // For now, only support standalone mode
-    // TODO: Add authenticated remote proxy mode when OAuth2 is implemented
-    if (this._isAuthenticated) {
-      return {
-        content: [{
-          type: 'text',
-          text: `### Authentication Detected\n\nAuthenticated remote proxy mode is not yet implemented.\nPlease connect without authentication for standalone mode.`
-        }],
-        isError: true
-      };
+    // Choose mode based on authentication
+    if (this._isAuthenticated && this._userInfo?.connectionUrl) {
+      debugLog('[StatefulBackend] Starting authenticated proxy mode');
+      return await this._connectToProxy();
+    } else {
+      debugLog('[StatefulBackend] Starting standalone mode');
+      return await this._becomePrimary();
     }
-
-    debugLog('[StatefulBackend] Starting standalone mode');
-    return await this._becomePrimary();
   }
 
   async _becomePrimary() {
@@ -255,6 +249,35 @@ class StatefulBackend {
     }
   }
 
+  async _connectToProxy() {
+    try {
+      debugLog('[StatefulBackend] Connecting to remote proxy:', this._userInfo.connectionUrl);
+
+      // TODO: Implement ProxyClientBackend that connects to remote WebSocket proxy
+      // For now, return a message indicating the feature is coming soon
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### 🚧 Proxy Mode (Coming Soon)\n\n` +
+                `**Connection URL:** ${this._userInfo.connectionUrl}\n` +
+                `**Email:** ${this._userInfo.email}\n\n` +
+                `Remote proxy mode is under development. For now, please use standalone mode by logging out first.`
+        }],
+        isError: true
+      };
+    } catch (error) {
+      debugLog('[StatefulBackend] Failed to connect to proxy:', error);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Connection Failed\n\nFailed to connect to remote proxy:\n${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
 
   async _handleDisconnect() {
     if (this._state === 'passive') {
@@ -381,19 +404,19 @@ class StatefulBackend {
 
       const tokens = await this._oauthClient.authenticate();
 
-      debugLog('[StatefulBackend] Authentication successful, verifying tokens...');
+      debugLog('[StatefulBackend] Authentication successful, decoding token...');
 
-      // Verify tokens and get user info
-      this._userInfo = await this._oauthClient.verifyTokens();
+      // Decode token and get user info
+      this._userInfo = await this._oauthClient.getUserInfo();
 
       if (!this._userInfo) {
-        debugLog('[StatefulBackend] Token verification failed');
+        debugLog('[StatefulBackend] Failed to decode token');
         await this._oauthClient.clearTokens();
 
         return {
           content: [{
             type: 'text',
-            text: `### Authentication Failed\n\nFailed to verify authentication tokens. Please try again.`
+            text: `### Authentication Failed\n\nFailed to decode authentication token. Please try again.`
           }],
           isError: true
         };
@@ -403,15 +426,13 @@ class StatefulBackend {
 
       debugLog('[StatefulBackend] Authentication complete:', this._userInfo);
 
-      const proStatus = this._userInfo.isPro ? '✅ PRO Account' : '❌ Free Account';
-
       return {
         content: [{
           type: 'text',
           text: `### ✅ Authentication Successful!\n\n` +
                 `**Email:** ${this._userInfo.email}\n` +
-                `**Status:** ${proStatus}\n\n` +
-                `${this._userInfo.isPro ? 'You now have access to PRO features!' : 'Upgrade to PRO to unlock advanced features.'}`
+                `**Status:** ✅ PRO Account\n\n` +
+                `You now have access to PRO features including unlimited browser tabs!`
         }]
       };
     } catch (error) {
@@ -477,15 +498,13 @@ class StatefulBackend {
       };
     }
 
-    const proStatus = this._userInfo.isPro ? '✅ PRO Account' : '❌ Free Account';
-
     return {
       content: [{
         type: 'text',
         text: `### Authentication Status\n\n` +
               `**Email:** ${this._userInfo.email}\n` +
-              `**Status:** ${proStatus}\n\n` +
-              `${this._userInfo.isPro ? 'You have access to all PRO features!' : 'Upgrade to PRO to unlock advanced features.'}`
+              `**Status:** ✅ PRO Account\n\n` +
+              `You have access to all PRO features including unlimited browser tabs!`
       }]
     };
   }
