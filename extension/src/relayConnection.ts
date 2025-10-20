@@ -169,17 +169,29 @@ export class RelayConnection {
 
     debugLog('Received message:', message);
 
-    // Check if this is a notification/status message (has "type" instead of "method")
-    // Notifications don't need a response
-    if (message.type && !message.method) {
-      debugLog('Received notification:', message.type);
+    // Check if this is a JSON-RPC notification (has "method" but NO "id")
+    // Notifications don't require a response
+    if (message.method && message.id === undefined) {
+      debugLog('Received notification:', message.method, message.params);
       // Just log it, don't send a response
       return;
     }
 
-    // This is a command - must have "method" and should have "id"
+    // Check for legacy notifications (has "type" instead of "method")
+    if (message.type && !message.method) {
+      debugLog('Received legacy notification:', message.type);
+      // Just log it, don't send a response
+      return;
+    }
+
+    // This is a command - must have "method" and "id"
     if (!message.method) {
       debugLog('Invalid command: missing method field');
+      return;
+    }
+
+    if (message.id === undefined) {
+      debugLog('Invalid command: missing id field (use notification if no response expected)');
       return;
     }
 
