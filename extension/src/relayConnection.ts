@@ -80,8 +80,17 @@ export class RelayConnection {
     this._ws = ws;
     this._browserName = browserName;
     this._accessToken = accessToken;
+
+    console.error('[Extension] Setting up WebSocket handlers');
     this._ws.onmessage = this._onMessage.bind(this);
-    this._ws.onclose = () => this._onClose();
+    this._ws.onclose = () => {
+      console.error('[Extension] WebSocket closed');
+      this._onClose();
+    };
+    this._ws.onerror = (error) => {
+      console.error('[Extension] WebSocket error:', error);
+    };
+
     // Store listeners for cleanup
     this._eventListener = this._onDebuggerEvent.bind(this);
     this._detachListener = this._onDebuggerDetach.bind(this);
@@ -90,6 +99,7 @@ export class RelayConnection {
 
     // In proxy mode: Extension is PASSIVE - wait for proxy to send authenticate request
     // In direct mode: This still works but is legacy (will be replaced by JSON-RPC)
+    console.error('[Extension] Connection established, WebSocket state:', ws.readyState);
     debugLog('[Extension] Connection established, waiting for authenticate request from proxy');
   }
 
@@ -158,10 +168,15 @@ export class RelayConnection {
   }
 
   private async _onMessageAsync(event: MessageEvent): Promise<void> {
+    // Force log to verify this is being called
+    console.error('[Extension] _onMessageAsync called, data length:', event.data?.length);
+
     let message: any;
     try {
       message = JSON.parse(event.data);
+      console.error('[Extension] Parsed message:', message);
     } catch (error: any) {
+      console.error('[Extension] Error parsing message:', error);
       debugLog('Error parsing message:', error);
       this._sendError(-32700, `Error parsing message: ${error.message}`);
       return;
@@ -652,7 +667,14 @@ export class RelayConnection {
   }
 
   private _sendMessage(message: any): void {
-    if (this._ws.readyState === WebSocket.OPEN)
-      this._ws.send(JSON.stringify(message));
+    console.error('[Extension] _sendMessage called, readyState:', this._ws.readyState, 'messageType:', message.method || 'response');
+    if (this._ws.readyState === WebSocket.OPEN) {
+      const data = JSON.stringify(message);
+      console.error('[Extension] Sending message, length:', data.length);
+      this._ws.send(data);
+      console.error('[Extension] Message sent successfully');
+    } else {
+      console.error('[Extension] WebSocket not OPEN, cannot send. State:', this._ws.readyState);
+    }
   }
 }
