@@ -29,11 +29,15 @@ type ProtocolCommand = {
 };
 
 type ProtocolResponse = {
+  jsonrpc: '2.0';
   id?: number | string;
   method?: string;
   params?: any;
   result?: any;
-  error?: string;
+  error?: {
+    code: number;
+    message: string;
+  };
 };
 
 // Connection mode detection
@@ -84,27 +88,9 @@ export class RelayConnection {
     chrome.debugger.onEvent.addListener(this._eventListener);
     chrome.debugger.onDetach.addListener(this._detachListener);
 
-    // Send handshake with browser name and optional access token
-    // Note: In proxy mode, proxy sends authenticate request instead
-    this._sendHandshake(browserName, accessToken);
-  }
-
-  private _sendHandshake(browserName: string, accessToken?: string): void {
-    const params: any = {
-      name: browserName
-    };
-
-    if (accessToken) {
-      params.accessToken = accessToken;
-      debugLog('[Extension] Sending handshake with access token');
-    } else {
-      debugLog('[Extension] Sending handshake without access token (not authenticated)');
-    }
-
-    this._sendMessage({
-      method: 'extension_handshake',
-      params
-    });
+    // In proxy mode: Extension is PASSIVE - wait for proxy to send authenticate request
+    // In direct mode: This still works but is legacy (will be replaced by JSON-RPC)
+    debugLog('[Extension] Connection established, waiting for authenticate request from proxy');
   }
 
   // Either setTabId or close is called after creating the connection.
@@ -150,6 +136,7 @@ export class RelayConnection {
     debugLog('Forwarding CDP event:', method, params);
     const sessionId = source.sessionId;
     this._sendMessage({
+      jsonrpc: '2.0',
       method: 'forwardCDPEvent',
       params: {
         sessionId,
@@ -210,6 +197,7 @@ export class RelayConnection {
     }
 
     const response: ProtocolResponse = {
+      jsonrpc: '2.0',
       id: message.id, // Always preserve the same ID we received
     };
     try {
@@ -218,7 +206,10 @@ export class RelayConnection {
       response.result = result !== undefined ? result : {};
     } catch (error: any) {
       debugLog('Error handling command:', error);
-      response.error = error.message;
+      response.error = {
+        code: -32000,
+        message: error.message
+      };
     }
     debugLog('Sending response:', response);
     this._sendMessage(response);
@@ -510,6 +501,7 @@ export class RelayConnection {
 
     // Send stealth mode to CDP relay (for Playwright-level patches)
     this._sendMessage({
+      jsonrpc: '2.0',
       method: 'setStealthMode',
       params: { stealthMode: stealth }
     });
@@ -565,6 +557,7 @@ export class RelayConnection {
 
     // Send stealth mode to CDP relay (for Playwright-level patches)
     this._sendMessage({
+      jsonrpc: '2.0',
       method: 'setStealthMode',
       params: { stealthMode: stealth }
     });
@@ -623,8 +616,10 @@ export class RelayConnection {
     };
   }
 
-  private _sendError(code: number, message: string): void {
+  private _sendError(code: number, message: string, id?: number | string): void {
     this._sendMessage({
+      jsonrpc: '2.0',
+      id: id ?? null,
       error: {
         code,
         message,
