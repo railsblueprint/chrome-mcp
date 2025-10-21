@@ -697,12 +697,38 @@ class UnifiedBackend {
   async _handlePressKey(args) {
     const key = args.key;
 
+    // Map common keys to their key codes
+    const keyCodeMap = {
+      'Enter': 13,
+      'Escape': 27,
+      'Tab': 9,
+      'Backspace': 8,
+      'Delete': 46,
+      'ArrowUp': 38,
+      'ArrowDown': 40,
+      'ArrowLeft': 37,
+      'ArrowRight': 39,
+      'Space': 32
+    };
+
+    const code = keyCodeMap[key];
+    const text = key === 'Enter' ? '\r' : (key === 'Tab' ? '\t' : (key.length === 1 ? key : ''));
+
+    const baseParams = {
+      key: key,
+      code: key,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+      text: text,
+      unmodifiedText: text
+    };
+
     // Send keyDown
     await this._transport.sendCommand('forwardCDPCommand', {
       method: 'Input.dispatchKeyEvent',
       params: {
         type: 'keyDown',
-        key: key
+        ...baseParams
       }
     });
 
@@ -711,7 +737,7 @@ class UnifiedBackend {
       method: 'Input.dispatchKeyEvent',
       params: {
         type: 'keyUp',
-        key: key
+        ...baseParams
       }
     });
 
