@@ -140,13 +140,13 @@ class UnifiedBackend {
       // Screenshot
       {
         name: 'browser_take_screenshot',
-        description: 'Capture screenshot of the page',
+        description: 'Capture screenshot of the page (default: JPEG quality 80, viewport only)',
         inputSchema: {
           type: 'object',
           properties: {
-            type: { type: 'string', enum: ['png', 'jpeg'], description: 'Image format' },
-            fullPage: { type: 'boolean', description: 'Capture full page' },
-            quality: { type: 'number', description: 'JPEG quality 0-100' }
+            type: { type: 'string', enum: ['png', 'jpeg'], description: 'Image format (default: jpeg)' },
+            fullPage: { type: 'boolean', description: 'Capture full page (default: false, viewport only)' },
+            quality: { type: 'number', description: 'JPEG quality 0-100 (default: 80)' }
           }
         }
       },
@@ -1171,9 +1171,56 @@ class UnifiedBackend {
       params: {}
     });
 
-    // Format snapshot as text
+    // DEBUG: Save raw unfiltered response to file
+    const fs = require('fs');
+    const path = require('path');
+    const debugFile = path.join(process.cwd(), 'snapshot-raw-debug.json');
+    try {
+      fs.writeFileSync(debugFile, JSON.stringify(result, null, 2));
+      console.log(`[DEBUG] Saved raw snapshot to ${debugFile}`);
+    } catch (error) {
+      console.error('[DEBUG] Failed to save raw snapshot:', error);
+    }
+
+    // Build tree from flat array
     const nodes = result.nodes || [];
-    const snapshot = this._formatAXTree(nodes);
+    const nodeMap = new Map();
+
+    // First pass: index all nodes by ID
+    for (const node of nodes) {
+      nodeMap.set(node.nodeId, { ...node, children: [] });
+    }
+
+    // Second pass: build parent-child relationships
+    let rootNode = null;
+    for (const node of nodeMap.values()) {
+      if (node.parentId) {
+        const parent = nodeMap.get(node.parentId);
+        if (parent) {
+          parent.children.push(node);
+        }
+      } else {
+        rootNode = node; // This is the root (no parent)
+      }
+    }
+
+    // Clean, collapse, and clean again
+    if (rootNode) {
+      this._cleanTree(rootNode);   // First pass: remove InlineTextBox, empty elements
+      this._collapseTree(rootNode); // Collapse useless wrappers
+      this._cleanTree(rootNode);   // Second pass: remove buttons that now have only images
+    }
+
+    // Format snapshot as text
+    const snapshot = rootNode ? this._formatAXTree([rootNode]) : 'No root node found';
+
+    // DEBUG: Save formatted snapshot to file
+    try {
+      fs.writeFileSync(path.join(process.cwd(), 'snapshot-formatted-debug.txt'), `### Page Snapshot\n\n${snapshot}`);
+      console.log(`[DEBUG] Saved formatted snapshot to snapshot-formatted-debug.txt`);
+    } catch (error) {
+      console.error('[DEBUG] Failed to save formatted snapshot:', error);
+    }
 
     return {
       content: [{
@@ -1184,29 +1231,188 @@ class UnifiedBackend {
     };
   }
 
-  _formatAXTree(nodes, depth = 0) {
-    if (!nodes || nodes.length === 0) return '';
+  _cleanTree(node) {
+    // Recursively clean children first
+    if (node.children && node.children.length > 0) {
+      for (const child of node.children) {
+        this._cleanTree(child);
+      }
 
-    let output = '';
-    for (const node of nodes.slice(0, 50)) { // Limit to first 50 nodes
-      const indent = '  '.repeat(depth);
-      const role = node.role?.value || 'unknown';
-      const name = node.name?.value || '';
-      output += `${indent}${role}${name ? `: ${name}` : ''}\n`;
+      // Remove empty/useless children
+      node.children = node.children.filter(child => {
+        const role = child.role?.value || 'unknown';
+        const name = child.name?.value || '';
 
-      if (node.children) {
-        output += this._formatAXTree(node.children, depth + 1);
+        // Remove empty none/generic with no children
+        if ((role === 'none' || role === 'generic') && !name && (!child.children || child.children.length === 0)) {
+          return false;
+        }
+
+        // Remove buttons/links with only images that have no description
+        if (role === 'button' || role === 'link') {
+          // If it has a name, keep it
+          if (name) return true;
+
+          // If no name and no children, remove it
+          if (!child.children || child.children.length === 0) {
+            return false;
+          }
+
+          // If no name, check if all children are images without descriptions
+          const hasOnlyUselessImages = child.children.every(c => {
+            const childRole = c.role?.value || '';
+            const childName = c.name?.value || '';
+            return childRole === 'image' && !childName;
+          });
+          if (hasOnlyUselessImages) return false;
+        }
+
+        // Remove InlineTextBox children (they duplicate parent StaticText)
+        if (role === 'InlineTextBox' || role === 'inlineTextBox') {
+          return false;
+        }
+
+        // Remove images with no description (no alt text, no aria-label)
+        if (role === 'image' && !name) {
+          return false;
+        }
+
+        // Remove LabelText with no content
+        if (role === 'LabelText' && !name && (!child.children || child.children.length === 0)) {
+          return false;
+        }
+
+        return true;
+      });
+    }
+  }
+
+  _collapseTree(node) {
+    // Recursively collapse children first (bottom-up)
+    if (node.children && node.children.length > 0) {
+      for (const child of node.children) {
+        this._collapseTree(child);
       }
     }
+
+    // Collapse useless single-child chains
+    // If this node is "none"/"generic" with no text and only 1 child, skip it
+    const role = node.role?.value || 'unknown';
+    const name = node.name?.value || '';
+    const isUseless = (role === 'none' || role === 'generic' || role === 'unknown') && !name;
+
+    if (isUseless && node.children && node.children.length === 1) {
+      // Promote the single child: replace this node's children with grandchildren
+      const child = node.children[0];
+      node.role = child.role;
+      node.name = child.name;
+      node.children = child.children || [];
+
+      // Recursively collapse again in case we created another collapsible chain
+      this._collapseTree(node);
+    }
+  }
+
+  _formatAXTree(nodes, depth = 0, totalLines = { count: 0 }, maxLines = 200) {
+    if (!nodes || nodes.length === 0) return '';
+    if (totalLines.count >= maxLines) return '';
+
+    let output = '';
+    const indent = '  '.repeat(depth);
+
+    // Group consecutive nodes by role to detect repetitive patterns
+    const groups = [];
+    let currentGroup = null;
+
+    for (const node of nodes.slice(0, 100)) { // Process first 100 at each level
+      const role = node.role?.value || 'unknown';
+
+      if (!currentGroup || currentGroup.role !== role) {
+        if (currentGroup) groups.push(currentGroup);
+        currentGroup = { role, nodes: [node] };
+      } else {
+        currentGroup.nodes.push(node);
+      }
+    }
+    if (currentGroup) groups.push(currentGroup);
+
+    // Format output with deduplication
+    for (const group of groups) {
+      if (totalLines.count >= maxLines) break;
+
+      if (group.nodes.length <= 3) {
+        // Show all if 3 or fewer
+        for (const node of group.nodes) {
+          if (totalLines.count >= maxLines) break;
+
+          const name = node.name?.value || '';
+          output += `${indent}${group.role}${name ? `: ${name}` : ''}\n`;
+          totalLines.count++;
+
+          if (node.children && totalLines.count < maxLines) {
+            output += this._formatAXTree(node.children, depth + 1, totalLines, maxLines);
+          }
+        }
+      } else {
+        // Repetitive pattern: show first 2, skip middle, show last 1
+        const first = group.nodes.slice(0, 2);
+        const last = group.nodes.slice(-1);
+        const skippedCount = group.nodes.length - 3;
+
+        for (const node of first) {
+          if (totalLines.count >= maxLines) break;
+
+          const name = node.name?.value || '';
+          output += `${indent}${group.role}${name ? `: ${name}` : ''}\n`;
+          totalLines.count++;
+
+          if (node.children && totalLines.count < maxLines) {
+            output += this._formatAXTree(node.children, depth + 1, totalLines, maxLines);
+          }
+        }
+
+        // Only show skip message for significant repetition (10+ elements)
+        if (totalLines.count < maxLines && skippedCount >= 10) {
+          output += `${indent}... ${skippedCount} more ${group.role} element${skippedCount > 1 ? 's' : ''} skipped\n`;
+          totalLines.count++;
+        }
+
+        for (const node of last) {
+          if (totalLines.count >= maxLines) break;
+
+          const name = node.name?.value || '';
+          output += `${indent}${group.role}${name ? `: ${name}` : ''}\n`;
+          totalLines.count++;
+
+          if (node.children && totalLines.count < maxLines) {
+            output += this._formatAXTree(node.children, depth + 1, totalLines, maxLines);
+          }
+        }
+      }
+    }
+
+    // Show truncation info at root level
+    if (depth === 0) {
+      if (totalLines.count >= maxLines) {
+        output += `\n--- Snapshot truncated at ${maxLines} lines to save context ---\n`;
+      }
+      if (nodes.length > 100) {
+        output += `\n(Processed first 100 elements at root level, ${nodes.length - 100} more not shown)\n`;
+      }
+    }
+
     return output;
   }
 
   async _handleScreenshot(args) {
+    const format = args.type || 'jpeg';  // Default to JPEG for smaller file size
+    const quality = args.quality !== undefined ? args.quality : 80;  // Default quality 80
+
     const result = await this._transport.sendCommand('forwardCDPCommand', {
       method: 'Page.captureScreenshot',
       params: {
-        format: args.type || 'png',
-        quality: args.quality,
+        format: format,
+        quality: format === 'jpeg' ? quality : undefined,  // Quality only applies to JPEG
         captureBeyondViewport: args.fullPage || false
       }
     });
@@ -1216,7 +1422,7 @@ class UnifiedBackend {
       content: [{
         type: 'image',
         data: result.data,
-        mimeType: `image/${args.type || 'png'}`
+        mimeType: `image/${format}`
       }],
       isError: false
     };

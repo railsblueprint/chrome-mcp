@@ -158,6 +158,7 @@ const Popup: React.FC = () => {
   };
 
   const handleLogout = () => {
+    // Clear tokens from storage
     chrome.storage.local.remove(['accessToken', 'refreshToken', 'isPro'], () => {
       setIsPro(false);
       setUserEmail(null);

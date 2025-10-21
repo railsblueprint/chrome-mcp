@@ -273,6 +273,12 @@ export class RelayConnection {
     // Notifications don't require a response
     if (message.method && message.id === undefined) {
       debugLog('Received notification:', message.method, message.params);
+
+      // Handle specific notifications
+      if (message.method === 'disconnected') {
+        await this._handleDisconnectedNotification(message.params);
+      }
+
       // Just log it, don't send a response
       return;
     }
@@ -336,6 +342,44 @@ export class RelayConnection {
       debugLog('Response sent successfully');
     } catch (sendError: any) {
       debugLog('ERROR sending response:', sendError);
+    }
+  }
+
+  private async _handleDisconnectedNotification(params: any): Promise<void> {
+    const connectionId = params?.connection_id;
+    const reason = params?.reason || 'Unknown reason';
+
+    debugLog(`Received disconnected notification for connection ${connectionId}: ${reason}`);
+
+    if (!connectionId) {
+      debugLog('No connection_id in disconnected notification');
+      return;
+    }
+
+    // Look up which tab is associated with this connection
+    const tabId = this._connectionMap.get(connectionId);
+
+    if (tabId) {
+      debugLog(`Connection ${connectionId} was using tab ${tabId}, detaching debugger`);
+
+      try {
+        // Detach debugger from the tab
+        await chrome.debugger.detach({ tabId });
+        debugLog(`Successfully detached debugger from tab ${tabId}`);
+
+        // Clear connection state
+        this._connectionMap.delete(connectionId);
+
+        // If this was our current debuggee, clear it
+        if (this._debuggee.tabId === tabId) {
+          debugLog(`Clearing current debuggee (was tab ${tabId})`);
+          this._debuggee = {};
+        }
+      } catch (error: any) {
+        debugLog(`Error detaching debugger from tab ${tabId}:`, error);
+      }
+    } else {
+      debugLog(`No tab found for connection ${connectionId}`);
     }
   }
 
@@ -486,7 +530,7 @@ export class RelayConnection {
       throw new Error('Failed to create test page window');
     }
     if (!this._debuggee.tabId)
-      throw new Error('No tab is connected. Please go to the Playwright MCP extension and select the tab you want to connect to.');
+      throw new Error('No tab is connected. The extension will reconnect automatically - please wait a moment and try again.');
 
     if (message.method === 'getConsoleMessages') {
       return {
@@ -541,15 +585,33 @@ export class RelayConnection {
   }
 
   private async _reloadExtensions(extensionName?: string): Promise<any> {
-    // Special case: reloading Blueprint MCP itself
-    if (extensionName === 'Blueprint MCP for Chrome') {
-      debugLog('Reloading Blueprint MCP for Chrome using chrome.runtime.reload()');
+    // Get our own extension name
+    const ourManifest = chrome.runtime.getManifest();
+    const ourExtensionName = ourManifest.name;
+
+    // When no extension name provided, default to reloading ourselves safely
+    if (!extensionName) {
+      debugLog(`No extension name provided, reloading ${ourExtensionName} using chrome.runtime.reload()`);
       setTimeout(() => {
         chrome.runtime.reload();
       }, 100);
       return {
         reloadedCount: 1,
-        reloadedExtensions: ['Blueprint MCP for Chrome'],
+        reloadedExtensions: [ourExtensionName],
+        message: 'Extension will reload and reconnect automatically. Please wait a moment before making the next request.',
+      };
+    }
+
+    // Special case: reloading Blueprint MCP itself by name
+    if (extensionName === ourExtensionName || extensionName === 'Blueprint MCP for Chrome') {
+      debugLog(`Reloading ${ourExtensionName} using chrome.runtime.reload()`);
+      setTimeout(() => {
+        chrome.runtime.reload();
+      }, 100);
+      return {
+        reloadedCount: 1,
+        reloadedExtensions: [ourExtensionName],
+        message: 'Extension will reload and reconnect automatically. Please wait a moment before making the next request.',
       };
     }
 
@@ -585,6 +647,12 @@ export class RelayConnection {
 
         // If extensionName is specified, only reload matching extension
         if (extensionName && ext.name !== extensionName) {
+          continue;
+        }
+
+        // Skip ourselves - use chrome.runtime.reload() for self-reload
+        if (ext.name === ourExtensionName) {
+          debugLog(`Skipping self-reload via disable/enable for ${ext.name}, use chrome.runtime.reload() instead`);
           continue;
         }
 
@@ -814,8 +882,19 @@ export class RelayConnection {
     if (this._ws.readyState === WebSocket.OPEN) {
       const data = JSON.stringify(message);
       console.error('[Extension] Sending message, length:', data.length);
-      this._ws.send(data);
-      console.error('[Extension] Message sent successfully');
+
+      // Warn about large messages (>2MB might cause WebSocket issues)
+      if (data.length > 2 * 1024 * 1024) {
+        console.warn(`[Extension] WARNING: Large message (${(data.length / 1024 / 1024).toFixed(2)}MB) may cause WebSocket connection issues. Consider using lower quality screenshots or viewport-only captures.`);
+      }
+
+      try {
+        this._ws.send(data);
+        console.error('[Extension] Message sent successfully');
+      } catch (error) {
+        console.error('[Extension] Failed to send message:', error);
+        // Don't close connection on send error - let it be handled by onclose
+      }
     } else {
       console.error('[Extension] WebSocket not OPEN, cannot send. State:', this._ws.readyState);
     }

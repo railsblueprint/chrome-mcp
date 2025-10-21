@@ -1,8 +1,8 @@
-# Playwright MCP Chrome Extension
+# Blueprint MCP for Chrome
 
 ## Introduction
 
-The Playwright MCP Chrome Extension allows you to connect to pages in your existing browser and leverage the state of your default user profile. This means the AI assistant can interact with websites where you're already logged in, using your existing cookies, sessions, and browser state, providing a seamless experience without requiring separate authentication or setup.
+Blueprint MCP for Chrome allows you to connect to pages in your existing browser and leverage the state of your default user profile. This means the AI assistant can interact with websites where you're already logged in, using your existing cookies, sessions, and browser state, providing a seamless experience without requiring separate authentication or setup.
 
 ## Prerequisites
 
@@ -13,26 +13,28 @@ The Playwright MCP Chrome Extension allows you to connect to pages in your exist
 ### Download the Extension
 
 Download the latest Chrome extension from GitHub:
-- **Download link**: https://github.com/microsoft/playwright-mcp/releases
+- **Download link**: https://github.com/railsblueprint/chrome-mcp/releases
 
-### Load Chrome Extension
+Or install from Chrome Web Store:
+- **Chrome Web Store**: https://chromewebstore.google.com/detail/browser-mcp/bjfgambnhccakkhmkepdoekmckoijdlc
+
+### Load Chrome Extension (for development)
 
 1. Open Chrome and navigate to `chrome://extensions/`
 2. Enable "Developer mode" (toggle in the top right corner)
 3. Click "Load unpacked" and select the extension directory
 
-### Configure Playwright MCP server
+### Configure Blueprint MCP for Chrome
 
-Configure Playwright MCP server to connect to the browser using the extension by passing the `--extension` option when running the MCP server:
+Configure Blueprint MCP for Chrome by adding it to your MCP settings:
 
 ```json
 {
   "mcpServers": {
-    "playwright-extension": {
+    "chrome-mcp": {
       "command": "npx",
       "args": [
-        "@playwright/mcp@latest",
-        "--extension"
+        "@railsblueprint/chrome-mcp@latest"
       ]
     }
   }

@@ -266,7 +266,7 @@ for (const [mode, startClientMethod] of [
     });
 
     const confirmationPage = await confirmationPagePromise;
-    await expect(confirmationPage.locator('.status-banner')).toContainText(`Playwright MCP version trying to connect requires newer extension version`);
+    await expect(confirmationPage.locator('.status-banner')).toContainText(`Blueprint MCP for Chrome version trying to connect requires newer extension version`);
 
     expect(await navigateResponse).toHaveResponse({
       result: expect.stringContaining('Extension connection timeout.'),
