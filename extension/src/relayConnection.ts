@@ -352,6 +352,52 @@ export class RelayConnection {
       }, 100);
       return { reloaded: true };
     }
+    if (message.method === 'openTestPage') {
+      debugLog('Opening test page in new window...');
+      const testPageUrl = chrome.runtime.getURL('test-interactions.html');
+      const window = await chrome.windows.create({
+        url: testPageUrl,
+        type: 'normal',
+        focused: true
+      });
+
+      // Get the tab that was created in the new window
+      if (window.tabs && window.tabs.length > 0) {
+        const tab = window.tabs[0];
+        if (tab.id) {
+          // Update debuggee to this new tab
+          this._debuggee = { tabId: tab.id };
+
+          // In proxy mode, store connection mapping
+          if (connectionId) {
+            this._connectionMap.set(connectionId, tab.id);
+            debugLog(`Stored connection mapping: ${connectionId} → tab ${tab.id}`);
+          }
+
+          // Notify background script
+          if (this.onTabConnected) {
+            this.onTabConnected(tab.id);
+          }
+
+          // Wait for page to load, then attach debugger
+          await new Promise(resolve => setTimeout(resolve, 500));
+          debugLog('Attaching debugger to test page tab:', this._debuggee);
+          await chrome.debugger.attach(this._debuggee, '1.3');
+          debugLog('Debugger attached successfully');
+
+          return {
+            success: true,
+            url: testPageUrl,
+            tab: {
+              id: tab.id,
+              title: tab.title,
+              url: testPageUrl
+            }
+          };
+        }
+      }
+      throw new Error('Failed to create test page window');
+    }
     if (!this._debuggee.tabId)
       throw new Error('No tab is connected. Please go to the Playwright MCP extension and select the tab you want to connect to.');
     if (message.method === 'forwardCDPCommand') {

@@ -546,29 +546,13 @@ class UnifiedBackend {
     }
 
     if (action === 'test_page') {
-      // Get the test page URL from extension and navigate to it
-      const urlResult = await this._transport.sendCommand('forwardCDPCommand', {
-        method: 'Runtime.evaluate',
-        params: {
-          expression: 'chrome.runtime.getURL("test-interactions.html")',
-          returnByValue: true
-        }
-      });
-
-      const testPageUrl = urlResult.result?.value;
-      if (!testPageUrl) {
-        throw new Error('Failed to get test page URL');
-      }
-
-      await this._transport.sendCommand('forwardCDPCommand', {
-        method: 'Page.navigate',
-        params: { url: testPageUrl }
-      });
+      // Open test page in a new window via extension
+      const result = await this._transport.sendCommand('openTestPage', {});
 
       return {
         content: [{
           type: 'text',
-          text: `### Navigated to Test Page\n\nURL: ${testPageUrl}`
+          text: `### Opened Test Page\n\nNew window created with test page\nURL: ${result.url}\nTab ID: ${result.tab?.id}`
         }],
         isError: false
       };
