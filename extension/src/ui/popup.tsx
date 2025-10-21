@@ -305,6 +305,15 @@ const Popup: React.FC = () => {
           >
             📖 Documentation
           </a>
+          <button
+            className="test-page-link"
+            onClick={() => {
+              const testPageUrl = chrome.runtime.getURL('test-interactions.html');
+              chrome.tabs.create({ url: testPageUrl, active: true });
+            }}
+          >
+            🧪 Test Page
+          </button>
           {!isPro && (
             <a
               href={config.buyMeACoffeeUrl}

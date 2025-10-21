@@ -280,6 +280,7 @@ body {
 
 .settings-link,
 .doc-link,
+.test-page-link,
 .beer-link {
   display: block;
   text-align: center;
@@ -313,6 +314,18 @@ body {
 .doc-link:hover {
   background-color: #e0f0fa;
   color: #155a94;
+}
+
+.test-page-link {
+  color: #2c5060;
+  background-color: #f0f4f5;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.test-page-link:hover {
+  background-color: #e0e8ea;
+  color: #1a3540;
 }
 
 .beer-link {
