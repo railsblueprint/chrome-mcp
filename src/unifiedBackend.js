@@ -297,6 +297,16 @@ class UnifiedBackend {
             extensionName: { type: 'string', description: 'Specific extension to reload' }
           }
         }
+      },
+
+      // Performance metrics
+      {
+        name: 'browser_performance_metrics',
+        description: 'Get performance metrics for current page - collects FCP, LCP, CLS, TTFB, and other Web Vitals',
+        inputSchema: {
+          type: 'object',
+          properties: {}
+        }
       }
     ];
   }
@@ -368,6 +378,9 @@ class UnifiedBackend {
 
         case 'browser_reload_extensions':
           return await this._handleReloadExtensions(args);
+
+        case 'browser_performance_metrics':
+          return await this._handlePerformanceMetrics(args);
 
         default:
           throw new Error(`Tool '${name}' not implemented yet`);
@@ -1694,6 +1707,140 @@ class UnifiedBackend {
       }],
       isError: false
     };
+  }
+
+  // ==================== PERFORMANCE METRICS ====================
+
+  async _handlePerformanceMetrics(args) {
+    // Get current page URL
+    const pageInfo = await this._transport.sendCommand('forwardCDPCommand', {
+      method: 'Target.getTargetInfo',
+      params: {}
+    });
+
+    const url = pageInfo.targetInfo?.url;
+    if (!url || url.startsWith('chrome://') || url.startsWith('about:')) {
+      throw new Error('Cannot get metrics for chrome:// or about:// pages. Please navigate to a web page first.');
+    }
+
+    try {
+      debugLog('Collecting performance metrics for:', url);
+
+      // Get Performance metrics from CDP
+      const metricsResult = await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Performance.getMetrics',
+        params: {}
+      });
+
+      // Get Navigation Timing and Paint Timing via JavaScript
+      const timingResult = await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: `
+            (() => {
+              const perfEntries = performance.getEntriesByType('navigation')[0];
+              const paintEntries = performance.getEntriesByType('paint');
+              const layoutShift = performance.getEntriesByType('layout-shift');
+
+              // Calculate Web Vitals
+              const fcp = paintEntries.find(e => e.name === 'first-contentful-paint')?.startTime;
+              const lcp = performance.getEntriesByType('largest-contentful-paint').slice(-1)[0]?.startTime;
+
+              // Calculate CLS
+              let cls = 0;
+              layoutShift.forEach(entry => {
+                if (!entry.hadRecentInput) {
+                  cls += entry.value;
+                }
+              });
+
+              return {
+                // Navigation Timing
+                domContentLoaded: perfEntries?.domContentLoadedEventEnd - perfEntries?.domContentLoadedEventStart,
+                loadComplete: perfEntries?.loadEventEnd - perfEntries?.fetchStart,
+                domInteractive: perfEntries?.domInteractive - perfEntries?.fetchStart,
+
+                // Web Vitals
+                fcp: fcp,
+                lcp: lcp,
+                cls: cls,
+
+                // Time to First Byte
+                ttfb: perfEntries?.responseStart - perfEntries?.requestStart,
+
+                // Resource timing
+                dnsTime: perfEntries?.domainLookupEnd - perfEntries?.domainLookupStart,
+                tcpTime: perfEntries?.connectEnd - perfEntries?.connectStart,
+
+                // Document size
+                transferSize: perfEntries?.transferSize,
+                encodedBodySize: perfEntries?.encodedBodySize,
+              };
+            })()
+          `,
+          returnByValue: true
+        }
+      });
+
+      const timing = timingResult.result?.value || {};
+
+      // Format metrics
+      const formatMs = (ms) => ms ? `${Math.round(ms)}ms` : 'N/A';
+      const formatSec = (ms) => ms ? `${(ms / 1000).toFixed(2)}s` : 'N/A';
+      const formatBytes = (bytes) => {
+        if (!bytes) return 'N/A';
+        if (bytes < 1024) return `${bytes}B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+      };
+
+      // Evaluate performance (based on Google's thresholds)
+      const evalMetric = (value, good, needsWork) => {
+        if (!value) return '⚪';
+        return value <= good ? '🟢' : value <= needsWork ? '🟡' : '🔴';
+      };
+
+      const fcpEmoji = evalMetric(timing.fcp, 1800, 3000);
+      const lcpEmoji = evalMetric(timing.lcp, 2500, 4000);
+      const clsEmoji = timing.cls <= 0.1 ? '🟢' : timing.cls <= 0.25 ? '🟡' : '🔴';
+
+      const metricsText = `### Performance Metrics
+
+**URL:** ${url}
+
+**⚡ Core Web Vitals:**
+${fcpEmoji} First Contentful Paint (FCP): ${formatMs(timing.fcp)}
+${lcpEmoji} Largest Contentful Paint (LCP): ${formatMs(timing.lcp)}
+${clsEmoji} Cumulative Layout Shift (CLS): ${timing.cls?.toFixed(3) || 'N/A'}
+
+**📊 Load Timing:**
+- Time to First Byte (TTFB): ${formatMs(timing.ttfb)}
+- DOM Content Loaded: ${formatMs(timing.domContentLoaded)}
+- DOM Interactive: ${formatMs(timing.domInteractive)}
+- Load Complete: ${formatMs(timing.loadComplete)}
+
+**🌐 Network:**
+- DNS Lookup: ${formatMs(timing.dnsTime)}
+- TCP Connection: ${formatMs(timing.tcpTime)}
+- Transfer Size: ${formatBytes(timing.transferSize)}
+- Encoded Size: ${formatBytes(timing.encodedBodySize)}
+
+**Thresholds:** 🟢 Good | 🟡 Needs Improvement | 🔴 Poor
+- FCP: Good <1.8s, Poor >3s
+- LCP: Good <2.5s, Poor >4s
+- CLS: Good <0.1, Poor >0.25`;
+
+      return {
+        content: [{
+          type: 'text',
+          text: metricsText
+        }],
+        isError: false
+      };
+    } catch (error) {
+      debugLog('Performance metrics error:', error);
+      throw new Error(`Failed to collect performance metrics: ${error.message}`);
+    }
   }
 
   serverClosed() {

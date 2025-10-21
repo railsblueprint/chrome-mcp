@@ -83,6 +83,7 @@ class TabShareExtension {
     }
 
     this._autoConnecting = true;
+    this._autoConnectAttempts++;
 
     // Check if user has PRO account with connection URL
     const userInfo = await getUserInfoFromStorage();
@@ -100,17 +101,24 @@ class TabShareExtension {
       });
       mcpRelayUrl = `ws://127.0.0.1:${port}/extension`;
     }
+
+    console.error(`[Extension] Auto-connect attempt #${this._autoConnectAttempts} to ${mcpRelayUrl}`);
+
     try {
       await this._connectToRelay(0, mcpRelayUrl);
       // Connect in lazy mode (no specific tab, tab will be selected on first command)
       await this._connectTab(0, undefined, undefined, mcpRelayUrl);
       this._autoConnecting = false;
+      this._autoConnectAttempts = 0; // Reset counter on success
       await this._updateGlobalIcon(true);
       this._broadcastStatusChange();
+      console.error('[Extension] Auto-connect SUCCESSFUL');
     } catch (error: any) {
       this._autoConnecting = false;
       await this._updateGlobalIcon(false);
-      // Retry after 1 second
+      console.error(`[Extension] Auto-connect FAILED (attempt #${this._autoConnectAttempts}):`, error.message);
+
+      // Keep retrying forever every 1 second
       setTimeout(() => this._autoConnect(), 1000);
     }
   }
@@ -280,6 +288,7 @@ class TabShareExtension {
       }
 
       this._activeConnection.onclose = () => {
+        console.error('[Extension] Connection closed - auto-reconnecting in 1 second');
         this._activeConnection = undefined;
         this._stealthMode = null;
         this._projectName = null;
@@ -287,7 +296,10 @@ class TabShareExtension {
         void this._updateGlobalIcon(false);
         this._broadcastStatusChange();
         // Auto-reconnect after connection loss
-        setTimeout(() => this._autoConnect(), 1000);
+        setTimeout(() => {
+          console.error('[Extension] Attempting auto-reconnect...');
+          this._autoConnect();
+        }, 1000);
       };
     } catch (error: any) {
       await this._setConnectedTabId(null);
