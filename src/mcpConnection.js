@@ -34,6 +34,7 @@ class MCPConnection {
     this._authenticated = false; // For proxy mode
     this._connectionId = null; // For proxy mode - connection to specific extension
     this._pendingRequests = new Map(); // requestId -> { resolve, reject, timeoutId }
+    this.onClose = null; // Callback when connection closes
   }
 
   /**
@@ -111,6 +112,11 @@ class MCPConnection {
           reject(new Error('Connection closed'));
         }
         this._pendingRequests.clear();
+
+        // Notify the owner about connection close
+        if (this.onClose) {
+          this.onClose(code, reason.toString());
+        }
       });
     });
   }

@@ -289,6 +289,15 @@ class StatefulBackend {
       // Connect (handles authentication, listing extensions, and connecting to first one)
       await mcpConnection.connect();
 
+      // Monitor connection close events
+      mcpConnection.onClose = (code, reason) => {
+        debugLog('[StatefulBackend] Connection closed:', code, reason);
+        console.error('[StatefulBackend] ⚠️  Connection lost - resetting to passive state');
+        this._state = 'passive';
+        this._activeBackend = null;
+        this._proxyConnection = null;
+      };
+
       // Create ProxyTransport using the MCPConnection
       const transport = new ProxyTransport(mcpConnection);
 
