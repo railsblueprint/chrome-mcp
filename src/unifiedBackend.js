@@ -65,13 +65,13 @@ class UnifiedBackend {
       // Navigation
       {
         name: 'browser_navigate',
-        description: 'Navigate in the browser - go to URL, back, forward, or reload',
+        description: 'Navigate in the browser - go to URL, back, forward, reload, or open test page',
         inputSchema: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
-              enum: ['url', 'back', 'forward', 'reload'],
+              enum: ['url', 'back', 'forward', 'reload', 'test_page'],
               description: 'Navigation action to perform'
             },
             url: { type: 'string', description: 'URL to navigate to (required when action=url)' }
@@ -82,50 +82,45 @@ class UnifiedBackend {
 
       // Interaction
       {
-        name: 'browser_click',
-        description: 'Click an element by selector',
+        name: 'browser_interact',
+        description: 'Perform one or more browser interactions in sequence (click, type, press keys, hover, wait)',
         inputSchema: {
           type: 'object',
           properties: {
-            selector: { type: 'string', description: 'CSS selector' },
-            button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button' },
-            clickCount: { type: 'number', description: 'Number of clicks' }
+            actions: {
+              type: 'array',
+              description: 'Array of actions to perform in sequence',
+              items: {
+                type: 'object',
+                properties: {
+                  type: {
+                    type: 'string',
+                    enum: ['click', 'type', 'press_key', 'hover', 'wait', 'mouse_move', 'mouse_click'],
+                    description: 'Type of interaction'
+                  },
+                  selector: { type: 'string', description: 'CSS selector (for click, type, hover)' },
+                  text: { type: 'string', description: 'Text to type (for type action)' },
+                  key: { type: 'string', description: 'Key to press (for press_key action)' },
+                  x: { type: 'number', description: 'X coordinate (for mouse actions)' },
+                  y: { type: 'number', description: 'Y coordinate (for mouse actions)' },
+                  button: {
+                    type: 'string',
+                    enum: ['left', 'right', 'middle'],
+                    description: 'Mouse button (for click actions)'
+                  },
+                  clickCount: { type: 'number', description: 'Number of clicks (default: 1)' },
+                  timeout: { type: 'number', description: 'Timeout in ms (for wait action)' }
+                },
+                required: ['type']
+              }
+            },
+            onError: {
+              type: 'string',
+              enum: ['stop', 'ignore'],
+              description: 'What to do on error: stop execution or ignore and continue (default: stop)'
+            }
           },
-          required: ['selector']
-        }
-      },
-      {
-        name: 'browser_type',
-        description: 'Type text into an element',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            selector: { type: 'string', description: 'CSS selector' },
-            text: { type: 'string', description: 'Text to type' }
-          },
-          required: ['selector', 'text']
-        }
-      },
-      {
-        name: 'browser_press_key',
-        description: 'Press a keyboard key',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            key: { type: 'string', description: 'Key to press (e.g., Enter, Escape, ArrowDown)' }
-          },
-          required: ['key']
-        }
-      },
-      {
-        name: 'browser_hover',
-        description: 'Hover over an element',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            selector: { type: 'string', description: 'CSS selector' }
-          },
-          required: ['selector']
+          required: ['actions']
         }
       },
 
@@ -218,31 +213,6 @@ class UnifiedBackend {
 
       // Mouse operations
       {
-        name: 'browser_mouse_click_xy',
-        description: 'Click at specific coordinates',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            x: { type: 'number' },
-            y: { type: 'number' },
-            button: { type: 'string', enum: ['left', 'right', 'middle'] }
-          },
-          required: ['x', 'y']
-        }
-      },
-      {
-        name: 'browser_mouse_move_xy',
-        description: 'Move mouse to coordinates',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            x: { type: 'number' },
-            y: { type: 'number' }
-          },
-          required: ['x', 'y']
-        }
-      },
-      {
         name: 'browser_drag',
         description: 'Drag element to another element',
         inputSchema: {
@@ -271,19 +241,6 @@ class UnifiedBackend {
             height: { type: 'number', description: 'Window height (required for resize)' }
           },
           required: ['action']
-        }
-      },
-
-      // Wait
-      {
-        name: 'browser_wait_for',
-        description: 'Wait for condition',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            selector: { type: 'string', description: 'Wait for element to appear' },
-            timeout: { type: 'number', description: 'Timeout in ms' }
-          }
         }
       },
 
@@ -377,17 +334,8 @@ class UnifiedBackend {
         case 'browser_navigate':
           return await this._handleNavigate(args);
 
-        case 'browser_click':
-          return await this._handleClick(args);
-
-        case 'browser_type':
-          return await this._handleType(args);
-
-        case 'browser_press_key':
-          return await this._handlePressKey(args);
-
-        case 'browser_hover':
-          return await this._handleHover(args);
+        case 'browser_interact':
+          return await this._handleInteract(args);
 
         case 'browser_snapshot':
           return await this._handleSnapshot();
@@ -412,22 +360,12 @@ class UnifiedBackend {
           return await this._handleFileUpload(args);
 
         // Mouse
-        case 'browser_mouse_click_xy':
-          return await this._handleMouseClickXY(args);
-
-        case 'browser_mouse_move_xy':
-          return await this._handleMouseMoveXY(args);
-
         case 'browser_drag':
           return await this._handleDrag(args);
 
         // Window
         case 'browser_window':
           return await this._handleWindow(args);
-
-        // Wait
-        case 'browser_wait_for':
-          return await this._handleWaitFor(args);
 
         // Verification
         case 'browser_verify_text_visible':
@@ -607,7 +545,343 @@ class UnifiedBackend {
       };
     }
 
+    if (action === 'test_page') {
+      // Get the test page URL from extension and navigate to it
+      const urlResult = await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: 'chrome.runtime.getURL("test-interactions.html")',
+          returnByValue: true
+        }
+      });
+
+      const testPageUrl = urlResult.result?.value;
+      if (!testPageUrl) {
+        throw new Error('Failed to get test page URL');
+      }
+
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Page.navigate',
+        params: { url: testPageUrl }
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Navigated to Test Page\n\nURL: ${testPageUrl}`
+        }],
+        isError: false
+      };
+    }
+
     throw new Error(`Unknown navigation action: ${action}`);
+  }
+
+  async _handleInteract(args) {
+    const actions = args.actions || [];
+    const onError = args.onError || 'stop';
+    const results = [];
+
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
+      const actionIndex = i + 1;
+
+      try {
+        let result = null;
+
+        switch (action.type) {
+          case 'click': {
+            // Get element location
+            const elemResult = await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `
+                  (() => {
+                    const el = document.querySelector(${JSON.stringify(action.selector)});
+                    if (!el) return null;
+                    const rect = el.getBoundingClientRect();
+                    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                  })()
+                `,
+                returnByValue: true
+              }
+            });
+
+            if (!elemResult.result || !elemResult.result.value) {
+              throw new Error(`Element not found: ${action.selector}`);
+            }
+
+            const { x, y } = elemResult.result.value;
+            const button = action.button || 'left';
+
+            // Click at coordinates
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Input.dispatchMouseEvent',
+              params: {
+                type: 'mousePressed',
+                x, y,
+                button,
+                clickCount: action.clickCount || 1
+              }
+            });
+
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Input.dispatchMouseEvent',
+              params: {
+                type: 'mouseReleased',
+                x, y,
+                button,
+                clickCount: action.clickCount || 1
+              }
+            });
+
+            result = `Clicked ${action.selector}`;
+            break;
+          }
+
+          case 'type': {
+            // Focus element first
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `document.querySelector(${JSON.stringify(action.selector)})?.focus()`,
+                returnByValue: false
+              }
+            });
+
+            // Type each character
+            for (const char of action.text) {
+              await this._transport.sendCommand('forwardCDPCommand', {
+                method: 'Input.dispatchKeyEvent',
+                params: {
+                  type: 'char',
+                  text: char
+                }
+              });
+            }
+
+            result = `Typed "${action.text}" into ${action.selector}`;
+            break;
+          }
+
+          case 'press_key': {
+            const key = action.key;
+
+            // Map common keys to their key codes
+            const keyCodeMap = {
+              'Enter': 13,
+              'Escape': 27,
+              'Tab': 9,
+              'Backspace': 8,
+              'Delete': 46,
+              'ArrowUp': 38,
+              'ArrowDown': 40,
+              'ArrowLeft': 37,
+              'ArrowRight': 39,
+              'Space': 32
+            };
+
+            const code = keyCodeMap[key];
+            const text = key === 'Enter' ? '\r' : (key === 'Tab' ? '\t' : (key.length === 1 ? key : ''));
+
+            const baseParams = {
+              key: key,
+              code: key,
+              windowsVirtualKeyCode: code,
+              nativeVirtualKeyCode: code,
+              text: text,
+              unmodifiedText: text
+            };
+
+            // Send keyDown
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Input.dispatchKeyEvent',
+              params: {
+                type: 'keyDown',
+                ...baseParams
+              }
+            });
+
+            // Send keyUp
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Input.dispatchKeyEvent',
+              params: {
+                type: 'keyUp',
+                ...baseParams
+              }
+            });
+
+            result = `Pressed key: ${key}`;
+            break;
+          }
+
+          case 'hover': {
+            // Get element location
+            const elemResult = await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `
+                  (() => {
+                    const el = document.querySelector(${JSON.stringify(action.selector)});
+                    if (!el) return null;
+                    const rect = el.getBoundingClientRect();
+                    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                  })()
+                `,
+                returnByValue: true
+              }
+            });
+
+            if (!elemResult.result || !elemResult.result.value) {
+              throw new Error(`Element not found: ${action.selector}`);
+            }
+
+            const { x, y } = elemResult.result.value;
+
+            // Move mouse
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Input.dispatchMouseEvent',
+              params: {
+                type: 'mouseMoved',
+                x, y
+              }
+            });
+
+            result = `Hovered over ${action.selector}`;
+            break;
+          }
+
+          case 'wait': {
+            const timeout = action.timeout || 30000;
+            const selector = action.selector;
+
+            if (selector) {
+              // Wait for element
+              await this._transport.sendCommand('forwardCDPCommand', {
+                method: 'Runtime.evaluate',
+                params: {
+                  expression: `
+                    new Promise((resolve, reject) => {
+                      const timeout = setTimeout(() => reject(new Error('Timeout')), ${timeout});
+                      const check = () => {
+                        if (document.querySelector(${JSON.stringify(selector)})) {
+                          clearTimeout(timeout);
+                          resolve(true);
+                        } else {
+                          setTimeout(check, 100);
+                        }
+                      };
+                      check();
+                    })
+                  `,
+                  awaitPromise: true,
+                  returnByValue: true
+                }
+              });
+              result = `Waited for element: ${selector}`;
+            } else {
+              // Simple timeout
+              await new Promise(resolve => setTimeout(resolve, timeout));
+              result = `Waited ${timeout}ms`;
+            }
+            break;
+          }
+
+          case 'mouse_move': {
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Input.dispatchMouseEvent',
+              params: {
+                type: 'mouseMoved',
+                x: action.x,
+                y: action.y
+              }
+            });
+
+            result = `Moved mouse to (${action.x}, ${action.y})`;
+            break;
+          }
+
+          case 'mouse_click': {
+            const button = action.button || 'left';
+
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Input.dispatchMouseEvent',
+              params: {
+                type: 'mousePressed',
+                x: action.x,
+                y: action.y,
+                button,
+                clickCount: action.clickCount || 1
+              }
+            });
+
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Input.dispatchMouseEvent',
+              params: {
+                type: 'mouseReleased',
+                x: action.x,
+                y: action.y,
+                button,
+                clickCount: action.clickCount || 1
+              }
+            });
+
+            result = `Clicked at (${action.x}, ${action.y})`;
+            break;
+          }
+
+          default:
+            throw new Error(`Unknown action type: ${action.type}`);
+        }
+
+        results.push({
+          index: actionIndex,
+          action: action.type,
+          status: 'success',
+          message: result
+        });
+
+      } catch (error) {
+        const errorMessage = error.message || String(error);
+        results.push({
+          index: actionIndex,
+          action: action.type,
+          status: 'error',
+          message: errorMessage
+        });
+
+        // If onError is 'stop', throw immediately
+        if (onError === 'stop') {
+          const successCount = results.filter(r => r.status === 'success').length;
+          const errorCount = results.filter(r => r.status === 'error').length;
+
+          const summary = results.map(r =>
+            `${r.index}. ${r.action}: ${r.status === 'success' ? '✓' : '✗'} ${r.message}`
+          ).join('\n');
+
+          throw new Error(
+            `Interaction stopped at action ${actionIndex} due to error.\n\n` +
+            `Summary: ${successCount} succeeded, ${errorCount} failed\n\n${summary}`
+          );
+        }
+      }
+    }
+
+    // Generate final summary
+    const successCount = results.filter(r => r.status === 'success').length;
+    const errorCount = results.filter(r => r.status === 'error').length;
+
+    const summary = results.map(r =>
+      `${r.index}. ${r.action}: ${r.status === 'success' ? '✓' : '✗'} ${r.message}`
+    ).join('\n');
+
+    return {
+      content: [{
+        type: 'text',
+        text: `### Interactions Complete\n\nTotal: ${results.length}\nSucceeded: ${successCount}\nFailed: ${errorCount}\n\n${summary}`
+      }],
+      isError: errorCount > 0
+    };
   }
 
   async _handleClick(args) {
