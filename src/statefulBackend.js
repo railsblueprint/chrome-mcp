@@ -201,6 +201,31 @@ class StatefulBackend {
 
     debugLog('[StatefulBackend] Attempting to connect...');
 
+    // Check if user has invalid token (authenticated but missing connectionUrl)
+    if (this._isAuthenticated && !this._userInfo?.connectionUrl) {
+      debugLog('[StatefulBackend] Invalid token: missing connection_url');
+      return {
+        content: [{
+          type: 'text',
+          text: `### ❌ Invalid Authentication Token\n\n` +
+                `Your authentication token is missing required information (connection_url).\n\n` +
+                `**This can happen if:**\n` +
+                `- The relay server was updated and token format changed\n` +
+                `- The token was corrupted\n\n` +
+                `**Please choose one option:**\n\n` +
+                `1. **Continue in free mode (standalone):**\n` +
+                `   Use the auth tool to logout:\n` +
+                `   \`\`\`\n   auth action='logout'\n   \`\`\`\n` +
+                `   Then connect again - you'll use local browser only (port 5555)\n\n` +
+                `2. **Login again for relay access:**\n` +
+                `   First logout, then login:\n` +
+                `   \`\`\`\n   auth action='logout'\n   auth action='login'\n   \`\`\`\n` +
+                `   Then connect - you'll get a fresh token with relay access`
+        }],
+        isError: true
+      };
+    }
+
     // Choose mode based on authentication
     if (this._isAuthenticated && this._userInfo?.connectionUrl) {
       debugLog('[StatefulBackend] Starting authenticated proxy mode');
@@ -256,7 +281,7 @@ class StatefulBackend {
       );
 
       const errorMsg = isPortError
-        ? `### Connection Failed\n\nPort 5555 is already in use by another application.\n\nPlease close the other application using port 5555 and try again.`
+        ? `### Connection Failed\n\nPort 5555 is already in use.\n\n**Possible causes:**\n- Another MCP server is already running\n- Another application is using port 5555\n\n**Solution:** Kill the process using port 5555:\n\`\`\`\nlsof -ti:5555 | xargs kill -9\n\`\`\`\n\nThen try connecting again.`
         : `### Connection Failed\n\nFailed to start server:\n${error.message}`;
 
       return {

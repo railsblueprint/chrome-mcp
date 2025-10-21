@@ -38,6 +38,12 @@ class ExtensionServer {
       // Create WebSocket server
       this._wss = new WebSocketServer({ server: this._httpServer });
 
+      // Register WebSocket server error handler
+      this._wss.on('error', (error) => {
+        debugLog('WebSocketServer error:', error);
+        reject(error);
+      });
+
       this._wss.on('connection', (ws) => {
         debugLog('Extension connected');
 
@@ -65,15 +71,16 @@ class ExtensionServer {
         });
       });
 
+      // Register HTTP server error handler BEFORE calling listen() to catch port-in-use errors
+      this._httpServer.on('error', (error) => {
+        debugLog('HTTP Server error:', error);
+        reject(error);
+      });
+
       // Start listening
       this._httpServer.listen(this._port, this._host, () => {
         debugLog(`Server listening on ${this._host}:${this._port}`);
         resolve();
-      });
-
-      this._httpServer.on('error', (error) => {
-        debugLog('Server error:', error);
-        reject(error);
       });
     });
   }
