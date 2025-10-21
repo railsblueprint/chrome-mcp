@@ -68,6 +68,9 @@ export class RelayConnection {
   private _connectionMap: Map<string, number> = new Map(); // connectionId → tabId
   private _browserName: string;
   private _accessToken?: string;
+  private _consoleMessages: Array<{ type: string; text: string; timestamp: number; url?: string; lineNumber?: number }> = [];
+  private _networkRequests: Array<{ requestId: string; url: string; method: string; timestamp: number; statusCode?: number; statusText?: string; type?: string }> = [];
+  private _requestsMap: Map<string, any> = new Map(); // requestId → request details
 
   onclose?: () => void;
   onStealthModeSet?: (stealth: boolean) => void;
@@ -119,6 +122,35 @@ export class RelayConnection {
     this._onClose();
   }
 
+  private async _enableDomainsForTracking(): Promise<void> {
+    try {
+      // Enable Console domain for console message tracking
+      await chrome.debugger.sendCommand(this._debuggee, 'Runtime.enable');
+      await chrome.debugger.sendCommand(this._debuggee, 'Log.enable');
+
+      // Enable Network domain for network request tracking
+      await chrome.debugger.sendCommand(this._debuggee, 'Network.enable');
+
+      debugLog('Console and Network domains enabled for tracking');
+    } catch (error) {
+      console.error('[Extension] Failed to enable tracking domains:', error);
+    }
+  }
+
+  clearTracking(): void {
+    this._consoleMessages = [];
+    this._networkRequests = [];
+    this._requestsMap.clear();
+  }
+
+  getConsoleMessages(): Array<{ type: string; text: string; timestamp: number; url?: string; lineNumber?: number }> {
+    return this._consoleMessages.slice(); // Return a copy
+  }
+
+  getNetworkRequests(): Array<{ requestId: string; url: string; method: string; timestamp: number; statusCode?: number; statusText?: string; type?: string }> {
+    return this._networkRequests.slice(); // Return a copy
+  }
+
   private _onClose() {
     if (this._closed)
       return;
@@ -133,7 +165,60 @@ export class RelayConnection {
     if (source.tabId !== this._debuggee.tabId)
       return;
 
-    // Stealth mode: Filter out console-related CDP events
+    // Capture console messages (unless in stealth mode)
+    if (method === 'Runtime.consoleAPICalled' && !this._stealthMode) {
+      const args = params.args || [];
+      const textParts = args.map((arg: any) => arg.value || arg.description || String(arg)).join(' ');
+      this._consoleMessages.push({
+        type: params.type || 'log',
+        text: textParts,
+        timestamp: params.timestamp || Date.now(),
+        url: params.stackTrace?.callFrames?.[0]?.url,
+        lineNumber: params.stackTrace?.callFrames?.[0]?.lineNumber,
+      });
+    }
+
+    // Capture runtime exceptions
+    if (method === 'Runtime.exceptionThrown' && !this._stealthMode) {
+      const exception = params.exceptionDetails;
+      this._consoleMessages.push({
+        type: 'error',
+        text: exception?.text || exception?.exception?.description || 'Unknown error',
+        timestamp: exception?.timestamp || Date.now(),
+        url: exception?.url,
+        lineNumber: exception?.lineNumber,
+      });
+    }
+
+    // Capture network requests
+    if (method === 'Network.requestWillBeSent') {
+      const request = params.request;
+      this._requestsMap.set(params.requestId, {
+        url: request.url,
+        method: request.method,
+        timestamp: params.timestamp || Date.now(),
+        type: params.type,
+      });
+    }
+
+    // Capture network responses
+    if (method === 'Network.responseReceived') {
+      const requestData = this._requestsMap.get(params.requestId);
+      if (requestData) {
+        const response = params.response;
+        this._networkRequests.push({
+          requestId: params.requestId,
+          url: requestData.url,
+          method: requestData.method,
+          timestamp: requestData.timestamp,
+          statusCode: response.status,
+          statusText: response.statusText,
+          type: requestData.type,
+        });
+      }
+    }
+
+    // Stealth mode: Filter out console-related CDP events from being forwarded
     if (this._stealthMode && (
       method.startsWith('Runtime.consoleAPICalled') ||
       method.startsWith('Runtime.exceptionThrown') ||
@@ -297,6 +382,7 @@ export class RelayConnection {
 
         debugLog('Attaching debugger to tab:', this._debuggee);
         await chrome.debugger.attach(this._debuggee, '1.3');
+        await this._enableDomainsForTracking();
       }
 
       // If tab was already attached by _selectTab or _createTab, just get info
@@ -383,6 +469,7 @@ export class RelayConnection {
           await new Promise(resolve => setTimeout(resolve, 500));
           debugLog('Attaching debugger to test page tab:', this._debuggee);
           await chrome.debugger.attach(this._debuggee, '1.3');
+          await this._enableDomainsForTracking();
           debugLog('Debugger attached successfully');
 
           return {
@@ -400,6 +487,26 @@ export class RelayConnection {
     }
     if (!this._debuggee.tabId)
       throw new Error('No tab is connected. Please go to the Playwright MCP extension and select the tab you want to connect to.');
+
+    if (message.method === 'getConsoleMessages') {
+      return {
+        messages: this.getConsoleMessages(),
+      };
+    }
+
+    if (message.method === 'getNetworkRequests') {
+      return {
+        requests: this.getNetworkRequests(),
+      };
+    }
+
+    if (message.method === 'clearTracking') {
+      this.clearTracking();
+      return {
+        success: true,
+      };
+    }
+
     if (message.method === 'forwardCDPCommand') {
       const { sessionId, method, params } = message.params;
       debugLog('CDP command:', method, params);
@@ -592,6 +699,7 @@ export class RelayConnection {
     // Attach debugger immediately (no lazy attachment)
     debugLog('Attaching debugger to tab:', this._debuggee);
     await chrome.debugger.attach(this._debuggee, '1.3');
+    await this._enableDomainsForTracking();
     debugLog('Debugger attached successfully');
 
     return {
@@ -643,6 +751,7 @@ export class RelayConnection {
     await new Promise(resolve => setTimeout(resolve, 100));
     debugLog('Attaching debugger to new tab:', this._debuggee);
     await chrome.debugger.attach(this._debuggee, '1.3');
+    await this._enableDomainsForTracking();
     debugLog('Debugger attached successfully');
 
     return {

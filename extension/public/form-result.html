@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Form Submitted - Test Page</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f7fafc;
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    }
+    h1 {
+      color: #2d3748;
+      margin: 0 0 10px 0;
+      font-size: 32px;
+    }
+    .success-icon {
+      font-size: 64px;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .data-section {
+      background: #f7fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+    }
+    .data-section h2 {
+      margin: 0 0 15px 0;
+      color: #4a5568;
+      font-size: 18px;
+    }
+    .data-item {
+      padding: 10px 0;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .data-item:last-child {
+      border-bottom: none;
+    }
+    .data-label {
+      font-weight: 600;
+      color: #2d3748;
+      margin-right: 10px;
+    }
+    .data-value {
+      color: #4a5568;
+    }
+    .back-link {
+      display: inline-block;
+      margin-top: 20px;
+      padding: 12px 24px;
+      background: #4299e1;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    .back-link:hover {
+      background: #3182ce;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="success-icon">✅</div>
+    <h1>Form Submitted Successfully!</h1>
+    <p style="color: #718096;">Your test form has been submitted. Here's what we received:</p>
+
+    <div class="data-section">
+      <h2>📋 Submitted Data</h2>
+      <div id="form-data"></div>
+    </div>
+
+    <a href="test-interactions.html" class="back-link">← Back to Test Page</a>
+  </div>
+
+  <script src="form-result.js"></script>
+</body>
+</html>

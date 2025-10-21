@@ -95,14 +95,20 @@ class UnifiedBackend {
                 properties: {
                   type: {
                     type: 'string',
-                    enum: ['click', 'type', 'press_key', 'hover', 'wait', 'mouse_move', 'mouse_click'],
+                    enum: ['click', 'type', 'press_key', 'hover', 'wait', 'mouse_move', 'mouse_click', 'scroll_to', 'scroll_by', 'scroll_into_view', 'select_option', 'file_upload'],
                     description: 'Type of interaction'
                   },
-                  selector: { type: 'string', description: 'CSS selector (for click, type, hover)' },
+                  selector: { type: 'string', description: 'CSS selector (for click, type, hover, scroll_into_view, select_option, file_upload)' },
                   text: { type: 'string', description: 'Text to type (for type action)' },
                   key: { type: 'string', description: 'Key to press (for press_key action)' },
-                  x: { type: 'number', description: 'X coordinate (for mouse actions)' },
-                  y: { type: 'number', description: 'Y coordinate (for mouse actions)' },
+                  value: { type: 'string', description: 'Option value to select (for select_option action)' },
+                  files: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'File paths to upload (for file_upload action)'
+                  },
+                  x: { type: 'number', description: 'X coordinate (for mouse_move, mouse_click, scroll_to, scroll_by)' },
+                  y: { type: 'number', description: 'Y coordinate (for mouse_move, mouse_click, scroll_to, scroll_by)' },
                   button: {
                     type: 'string',
                     enum: ['left', 'right', 'middle'],
@@ -167,18 +173,6 @@ class UnifiedBackend {
 
       // Forms
       {
-        name: 'browser_select_option',
-        description: 'Select option in dropdown',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            selector: { type: 'string', description: 'CSS selector for select element' },
-            value: { type: 'string', description: 'Option value to select' }
-          },
-          required: ['selector', 'value']
-        }
-      },
-      {
         name: 'browser_fill_form',
         description: 'Fill multiple form fields at once',
         inputSchema: {
@@ -196,18 +190,6 @@ class UnifiedBackend {
             }
           },
           required: ['fields']
-        }
-      },
-      {
-        name: 'browser_file_upload',
-        description: 'Upload file to input element',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            selector: { type: 'string', description: 'CSS selector for file input' },
-            filePath: { type: 'string', description: 'Path to file' }
-          },
-          required: ['selector', 'filePath']
         }
       },
 
@@ -350,14 +332,8 @@ class UnifiedBackend {
           return await this._handleConsoleMessages();
 
         // Forms
-        case 'browser_select_option':
-          return await this._handleSelectOption(args);
-
         case 'browser_fill_form':
           return await this._handleFillForm(args);
-
-        case 'browser_file_upload':
-          return await this._handleFileUpload(args);
 
         // Mouse
         case 'browser_drag':
@@ -814,6 +790,132 @@ class UnifiedBackend {
             break;
           }
 
+          case 'scroll_to': {
+            // Scroll window to specific coordinates
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `window.scrollTo(${action.x || 0}, ${action.y || 0})`,
+                returnByValue: false
+              }
+            });
+
+            result = `Scrolled to (${action.x || 0}, ${action.y || 0})`;
+            break;
+          }
+
+          case 'scroll_by': {
+            // Scroll window by offset
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `window.scrollBy(${action.x || 0}, ${action.y || 0})`,
+                returnByValue: false
+              }
+            });
+
+            result = `Scrolled by (${action.x || 0}, ${action.y || 0})`;
+            break;
+          }
+
+          case 'scroll_into_view': {
+            // Scroll element into view
+            const scrollResult = await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `
+                  (() => {
+                    const el = document.querySelector(${JSON.stringify(action.selector)});
+                    if (!el) return { error: 'Element not found' };
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    return { success: true };
+                  })()
+                `,
+                returnByValue: true
+              }
+            });
+
+            if (scrollResult.result?.value?.error) {
+              throw new Error(`${scrollResult.result.value.error}: ${action.selector}`);
+            }
+
+            result = `Scrolled ${action.selector} into view`;
+            break;
+          }
+
+          case 'select_option': {
+            // Select option in dropdown
+            const selectResult = await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `
+                  (() => {
+                    const select = document.querySelector(${JSON.stringify(action.selector)});
+                    if (!select) return { error: 'Select element not found' };
+                    select.value = ${JSON.stringify(action.value)};
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
+                    return { success: true };
+                  })()
+                `,
+                returnByValue: true
+              }
+            });
+
+            if (selectResult.result?.value?.error) {
+              throw new Error(`${selectResult.result.value.error}: ${action.selector}`);
+            }
+
+            result = `Selected option "${action.value}" in ${action.selector}`;
+            break;
+          }
+
+          case 'file_upload': {
+            // Upload file(s) to input element
+            const files = action.files || [];
+            if (files.length === 0) {
+              throw new Error('No files specified for upload');
+            }
+
+            // Get the node for the file input
+            const evalResult = await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `
+                  (() => {
+                    const el = document.querySelector(${JSON.stringify(action.selector)});
+                    if (!el) throw new Error('File input not found');
+                    return el;
+                  })()
+                `,
+                returnByValue: false
+              }
+            });
+
+            if (!evalResult.result || !evalResult.result.objectId) {
+              throw new Error(`File input element not found: ${action.selector}`);
+            }
+
+            // Get the backend node ID
+            const nodeInfo = await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'DOM.describeNode',
+              params: {
+                objectId: evalResult.result.objectId
+              }
+            });
+
+            // Set the files
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'DOM.setFileInputFiles',
+              params: {
+                files: files,
+                backendNodeId: nodeInfo.node.backendNodeId
+              }
+            });
+
+            result = `Uploaded ${files.length} file(s) to ${action.selector}`;
+            break;
+          }
+
           default:
             throw new Error(`Unknown action type: ${action.type}`);
         }
@@ -1129,44 +1231,37 @@ class UnifiedBackend {
   }
 
   async _handleConsoleMessages() {
-    // This would require storing console messages on the extension side
-    // For now, return a placeholder
+    const result = await this._transport.sendCommand('getConsoleMessages');
+    const messages = result.messages || [];
+
+    if (messages.length === 0) {
+      return {
+        content: [{
+          type: 'text',
+          text: `### Console Messages\n\nNo console messages captured yet.`
+        }],
+        isError: false
+      };
+    }
+
+    const messageText = messages.map(msg => {
+      const location = msg.url && msg.lineNumber !== undefined
+        ? ` @ ${msg.url}:${msg.lineNumber}`
+        : '';
+      const timestamp = new Date(msg.timestamp).toLocaleTimeString();
+      return `[${timestamp}] [${msg.type.toUpperCase()}] ${msg.text}${location}`;
+    }).join('\n');
+
     return {
       content: [{
         type: 'text',
-        text: `### Console Messages\n\n(Console message collection not yet implemented)`
+        text: `### Console Messages\n\nCaptured ${messages.length} message(s):\n\n${messageText}`
       }],
       isError: false
     };
   }
 
   // ==================== FORMS ====================
-
-  async _handleSelectOption(args) {
-    await this._transport.sendCommand('forwardCDPCommand', {
-      method: 'Runtime.evaluate',
-      params: {
-        expression: `
-          (() => {
-            const select = document.querySelector(${JSON.stringify(args.selector)});
-            if (!select) throw new Error('Select element not found');
-            select.value = ${JSON.stringify(args.value)};
-            select.dispatchEvent(new Event('change', { bubbles: true }));
-            return { success: true };
-          })()
-        `,
-        returnByValue: true
-      }
-    });
-
-    return {
-      content: [{
-        type: 'text',
-        text: `### Option Selected\n\nSelector: ${args.selector}\nValue: ${args.value}`
-      }],
-      isError: false
-    };
-  }
 
   async _handleFillForm(args) {
     for (const field of args.fields) {
@@ -1191,23 +1286,6 @@ class UnifiedBackend {
       content: [{
         type: 'text',
         text: `### Form Filled\n\nFilled ${args.fields.length} fields`
-      }],
-      isError: false
-    };
-  }
-
-  async _handleFileUpload(args) {
-    await this._transport.sendCommand('forwardCDPCommand', {
-      method: 'DOM.setFileInputFiles',
-      params: {
-        files: [args.filePath]
-      }
-    });
-
-    return {
-      content: [{
-        type: 'text',
-        text: `### File Uploaded\n\nFile: ${args.filePath}`
       }],
       isError: false
     };
@@ -1521,11 +1599,29 @@ class UnifiedBackend {
   // ==================== NETWORK ====================
 
   async _handleNetworkRequests() {
-    // Would need to enable Network domain and collect requests
+    const result = await this._transport.sendCommand('getNetworkRequests');
+    const requests = result.requests || [];
+
+    if (requests.length === 0) {
+      return {
+        content: [{
+          type: 'text',
+          text: `### Network Requests\n\nNo network requests captured yet.`
+        }],
+        isError: false
+      };
+    }
+
+    const requestsText = requests.map(req => {
+      const status = req.statusCode ? `${req.statusCode} ${req.statusText}` : 'Pending';
+      const type = req.type ? ` [${req.type}]` : '';
+      return `${req.method} ${req.url}${type}\n  Status: ${status}`;
+    }).join('\n\n');
+
     return {
       content: [{
         type: 'text',
-        text: `### Network Requests\n\n(Network monitoring not yet implemented)`
+        text: `### Network Requests\n\nCaptured ${requests.length} request(s):\n\n${requestsText}`
       }],
       isError: false
     };

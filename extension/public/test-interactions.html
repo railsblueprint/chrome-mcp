@@ -122,6 +122,9 @@
       border-radius: 4px;
       color: #155724;
     }
+    .hidden-element.visible {
+      display: block;
+    }
     .checkbox-group,
     .radio-group {
       margin: 10px 0;
@@ -151,7 +154,7 @@
   <!-- Form Inputs Section -->
   <div class="test-section">
     <h2>📝 Form Inputs (type, press_key)</h2>
-    <form id="test-form">
+    <form id="test-form" method="POST" enctype="multipart/form-data">
       <div class="form-group">
         <label for="username">Username:</label>
         <input type="text" id="username" name="username" placeholder="Enter username">
@@ -181,6 +184,16 @@
       <div class="form-group">
         <label for="bio">Bio:</label>
         <textarea id="bio" name="bio" rows="4" placeholder="Tell us about yourself..."></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="avatar">Avatar (single file):</label>
+        <input type="file" id="avatar" name="avatar" accept="image/*">
+      </div>
+
+      <div class="form-group">
+        <label for="documents">Documents (multiple files):</label>
+        <input type="file" id="documents" name="documents" multiple>
       </div>
 
       <div class="checkbox-group">
@@ -259,103 +272,6 @@
     <button id="clear-log">Clear Log</button>
   </div>
 
-  <script>
-    // Event logger
-    function logEvent(message) {
-      const log = document.getElementById('event-log');
-      const timestamp = new Date().toLocaleTimeString();
-      const entry = document.createElement('div');
-      entry.textContent = `[${timestamp}] ${message}`;
-      entry.style.marginBottom = '5px';
-      log.appendChild(entry);
-      log.scrollTop = log.scrollHeight;
-    }
-
-    // Form event listeners
-    document.getElementById('test-form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      const formData = new FormData(e.target);
-      const data = Object.fromEntries(formData);
-      logEvent(`Form submitted: ${JSON.stringify(data)}`);
-    });
-
-    document.getElementById('username').addEventListener('input', (e) => {
-      logEvent(`Username changed: "${e.target.value}"`);
-    });
-
-    document.getElementById('email').addEventListener('input', (e) => {
-      logEvent(`Email changed: "${e.target.value}"`);
-    });
-
-    document.getElementById('country').addEventListener('change', (e) => {
-      logEvent(`Country selected: "${e.target.value}"`);
-    });
-
-    // Click testing
-    ['click-target-1', 'click-target-2', 'click-target-3'].forEach(id => {
-      document.getElementById(id).addEventListener('click', (e) => {
-        logEvent(`Clicked: ${e.target.textContent}`);
-        e.target.style.transform = 'scale(0.95)';
-        setTimeout(() => e.target.style.transform = '', 100);
-      });
-    });
-
-    document.getElementById('show-hidden').addEventListener('click', () => {
-      const hidden = document.getElementById('hidden-msg');
-      hidden.style.display = 'block';
-      logEvent('Hidden element shown');
-    });
-
-    // Hover testing
-    document.getElementById('hover-target').addEventListener('mouseenter', () => {
-      logEvent('Hover: Mouse entered hover target');
-    });
-
-    document.getElementById('hover-target').addEventListener('mouseleave', () => {
-      logEvent('Hover: Mouse left hover target');
-    });
-
-    // Mouse coordinates
-    const coordArea = document.getElementById('coord-area');
-    const coordDisplay = document.getElementById('coord-display');
-    const targetDot = document.getElementById('target-dot');
-
-    coordArea.addEventListener('mousemove', (e) => {
-      const rect = coordArea.getBoundingClientRect();
-      const x = Math.round(e.clientX - rect.left);
-      const y = Math.round(e.clientY - rect.top);
-      coordDisplay.textContent = `X: ${x}, Y: ${y}`;
-    });
-
-    coordArea.addEventListener('click', (e) => {
-      const rect = coordArea.getBoundingClientRect();
-      const x = Math.round(e.clientX - rect.left);
-      const y = Math.round(e.clientY - rect.top);
-      logEvent(`Mouse clicked at (${x}, ${y})`);
-    });
-
-    targetDot.addEventListener('click', () => {
-      logEvent('🎯 Bull\'s eye! Target dot clicked!');
-      targetDot.style.backgroundColor = '#00ff00';
-      setTimeout(() => targetDot.style.backgroundColor = '#ff4444', 500);
-    });
-
-    // Wait testing
-    document.getElementById('delayed-show').addEventListener('click', () => {
-      logEvent('Delayed element will appear in 2 seconds...');
-      setTimeout(() => {
-        document.getElementById('delayed-element').style.display = 'block';
-        logEvent('Delayed element is now visible!');
-      }, 2000);
-    });
-
-    // Clear log
-    document.getElementById('clear-log').addEventListener('click', () => {
-      document.getElementById('event-log').innerHTML = '<div>Event log cleared...</div>';
-    });
-
-    // Initial log
-    logEvent('Test page loaded and ready');
-  </script>
+  <script src="test-interactions.js"></script>
 </body>
 </html>
