@@ -492,14 +492,22 @@ class UnifiedBackend {
     if (action === 'list') {
       const result = await this._transport.sendCommand('getTabs', {});
       const tabs = result.tabs || [];
-      const tabList = tabs
-        .map((tab, i) => `${i}. ${tab.title || 'Untitled'} (${tab.url || 'about:blank'})`)
-        .join('\n');
+
+      // Format each tab with all metadata
+      const tabList = tabs.map((tab, i) => {
+        const markers = [];
+        if (tab.active) markers.push('ACTIVE');
+        if (tab.windowFocused) markers.push('FOCUSED WINDOW');
+        if (!tab.automatable) markers.push('NOT AUTOMATABLE');
+
+        const markerStr = markers.length > 0 ? ` [${markers.join(', ')}]` : '';
+        return `${i}. ${tab.title || 'Untitled'} (${tab.url || 'about:blank'})${markerStr}`;
+      }).join('\n');
 
       return {
         content: [{
           type: 'text',
-          text: `### Browser Tabs\n\nTotal: ${tabs.length}\n\n${tabList}`
+          text: `### Browser Tabs\n\nTotal: ${tabs.length}\nFocused Window: ${result.focusedWindowId}\n\n${tabList}`
         }],
         isError: false
       };
