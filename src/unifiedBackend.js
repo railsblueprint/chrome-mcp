@@ -65,24 +65,19 @@ class UnifiedBackend {
       // Navigation
       {
         name: 'browser_navigate',
-        description: 'Navigate to a URL in the current tab',
+        description: 'Navigate in the browser - go to URL, back, forward, or reload',
         inputSchema: {
           type: 'object',
           properties: {
-            url: { type: 'string', description: 'URL to navigate to' }
+            action: {
+              type: 'string',
+              enum: ['url', 'back', 'forward', 'reload'],
+              description: 'Navigation action to perform'
+            },
+            url: { type: 'string', description: 'URL to navigate to (required when action=url)' }
           },
-          required: ['url']
+          required: ['action']
         }
-      },
-      {
-        name: 'browser_navigate_back',
-        description: 'Navigate back in browser history',
-        inputSchema: { type: 'object', properties: {} }
-      },
-      {
-        name: 'browser_reload',
-        description: 'Reload the current page',
-        inputSchema: { type: 'object', properties: {} }
       },
 
       // Interaction
@@ -262,20 +257,20 @@ class UnifiedBackend {
 
       // Window operations
       {
-        name: 'browser_close',
-        description: 'Close current tab',
-        inputSchema: { type: 'object', properties: {} }
-      },
-      {
-        name: 'browser_resize',
-        description: 'Resize browser window',
+        name: 'browser_window',
+        description: 'Manage browser window - resize, close, minimize, or maximize',
         inputSchema: {
           type: 'object',
           properties: {
-            width: { type: 'number' },
-            height: { type: 'number' }
+            action: {
+              type: 'string',
+              enum: ['resize', 'close', 'minimize', 'maximize'],
+              description: 'Window action to perform'
+            },
+            width: { type: 'number', description: 'Window width (required for resize)' },
+            height: { type: 'number', description: 'Window height (required for resize)' }
           },
-          required: ['width', 'height']
+          required: ['action']
         }
       },
 
@@ -382,12 +377,6 @@ class UnifiedBackend {
         case 'browser_navigate':
           return await this._handleNavigate(args);
 
-        case 'browser_navigate_back':
-          return await this._handleNavigateBack();
-
-        case 'browser_reload':
-          return await this._handleReload();
-
         case 'browser_click':
           return await this._handleClick(args);
 
@@ -433,11 +422,8 @@ class UnifiedBackend {
           return await this._handleDrag(args);
 
         // Window
-        case 'browser_close':
-          return await this._handleClose();
-
-        case 'browser_resize':
-          return await this._handleResize(args);
+        case 'browser_window':
+          return await this._handleWindow(args);
 
         // Wait
         case 'browser_wait_for':
@@ -549,48 +535,79 @@ class UnifiedBackend {
   }
 
   async _handleNavigate(args) {
-    const result = await this._transport.sendCommand('forwardCDPCommand', {
-      method: 'Page.navigate',
-      params: { url: args.url }
-    });
+    const action = args.action;
 
-    return {
-      content: [{
-        type: 'text',
-        text: `### Navigated\n\nURL: ${args.url}`
-      }],
-      isError: false
-    };
-  }
+    if (action === 'url') {
+      if (!args.url) {
+        throw new Error('URL is required when action is "url"');
+      }
 
-  async _handleNavigateBack() {
-    await this._transport.sendCommand('forwardCDPCommand', {
-      method: 'Page.goBack',
-      params: {}
-    });
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Page.navigate',
+        params: { url: args.url }
+      });
 
-    return {
-      content: [{
-        type: 'text',
-        text: `### Navigated Back`
-      }],
-      isError: false
-    };
-  }
+      return {
+        content: [{
+          type: 'text',
+          text: `### Navigated\n\nURL: ${args.url}`
+        }],
+        isError: false
+      };
+    }
 
-  async _handleReload() {
-    await this._transport.sendCommand('forwardCDPCommand', {
-      method: 'Page.reload',
-      params: {}
-    });
+    if (action === 'back') {
+      // Use JavaScript history.back() instead of non-existent CDP method
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: 'window.history.back()'
+        }
+      });
 
-    return {
-      content: [{
-        type: 'text',
-        text: `### Page Reloaded`
-      }],
-      isError: false
-    };
+      return {
+        content: [{
+          type: 'text',
+          text: `### Navigated Back`
+        }],
+        isError: false
+      };
+    }
+
+    if (action === 'forward') {
+      // Use JavaScript history.forward()
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: 'window.history.forward()'
+        }
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Navigated Forward`
+        }],
+        isError: false
+      };
+    }
+
+    if (action === 'reload') {
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Page.reload',
+        params: {}
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Page Reloaded`
+        }],
+        isError: false
+      };
+    }
+
+    throw new Error(`Unknown navigation action: ${action}`);
   }
 
   async _handleClick(args) {
@@ -1034,37 +1051,97 @@ class UnifiedBackend {
 
   // ==================== WINDOW ====================
 
-  async _handleClose() {
-    // Close tab via extension command
-    await this._transport.sendCommand('closeTab', {});
+  async _handleWindow(args) {
+    const action = args.action;
 
-    return {
-      content: [{
-        type: 'text',
-        text: `### Tab Closed`
-      }],
-      isError: false
-    };
-  }
-
-  async _handleResize(args) {
-    await this._transport.sendCommand('forwardCDPCommand', {
-      method: 'Emulation.setDeviceMetricsOverride',
-      params: {
-        width: args.width,
-        height: args.height,
-        deviceScaleFactor: 1,
-        mobile: false
+    if (action === 'resize') {
+      if (!args.width || !args.height) {
+        throw new Error('Width and height are required for resize action');
       }
-    });
 
-    return {
-      content: [{
-        type: 'text',
-        text: `### Window Resized\n\nWidth: ${args.width}, Height: ${args.height}`
-      }],
-      isError: false
-    };
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Emulation.setDeviceMetricsOverride',
+        params: {
+          width: args.width,
+          height: args.height,
+          deviceScaleFactor: 1,
+          mobile: false
+        }
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Window Resized\n\nWidth: ${args.width}, Height: ${args.height}`
+        }],
+        isError: false
+      };
+    }
+
+    if (action === 'close') {
+      // Close tab via extension command
+      await this._transport.sendCommand('closeTab', {});
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Tab Closed`
+        }],
+        isError: false
+      };
+    }
+
+    if (action === 'minimize') {
+      // Minimize window using JavaScript
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: 'window.minimize ? window.minimize() : null'
+        }
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Window Minimized`
+        }],
+        isError: false
+      };
+    }
+
+    if (action === 'maximize') {
+      // Maximize window - get screen dimensions and resize
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: 'window.screen ? { width: window.screen.availWidth, height: window.screen.availHeight } : null',
+          returnByValue: true
+        }
+      }).then(async (result) => {
+        if (result.result && result.result.value) {
+          const { width, height } = result.result.value;
+          await this._transport.sendCommand('forwardCDPCommand', {
+            method: 'Emulation.setDeviceMetricsOverride',
+            params: {
+              width,
+              height,
+              deviceScaleFactor: 1,
+              mobile: false
+            }
+          });
+        }
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Window Maximized`
+        }],
+        isError: false
+      };
+    }
+
+    throw new Error(`Unknown window action: ${action}`);
   }
 
   // ==================== WAIT ====================
