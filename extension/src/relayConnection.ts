@@ -538,13 +538,7 @@ export class RelayConnection {
     // Store and notify about stealth mode
     this._stealthMode = stealth;
 
-    // Send stealth mode to CDP relay (for Playwright-level patches)
-    this._sendMessage({
-      jsonrpc: '2.0',
-      method: 'setStealthMode',
-      params: { stealthMode: stealth }
-    });
-
+    // Notify background script (UI display only)
     if (this.onStealthModeSet) {
       this.onStealthModeSet(stealth);
     }
@@ -594,13 +588,7 @@ export class RelayConnection {
     // Store and notify about stealth mode
     this._stealthMode = stealth;
 
-    // Send stealth mode to CDP relay (for Playwright-level patches)
-    this._sendMessage({
-      jsonrpc: '2.0',
-      method: 'setStealthMode',
-      params: { stealthMode: stealth }
-    });
-
+    // Notify background script (UI display only)
     if (this.onStealthModeSet) {
       this.onStealthModeSet(stealth);
     }

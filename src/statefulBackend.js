@@ -9,13 +9,11 @@
  * Note: Authenticated mode (connecting to remote proxy) is handled separately
  */
 
-const path = require('path');
-// Use require.resolve to find playwright modules in node_modules (works with npx)
-const playwrightPath = path.dirname(require.resolve('playwright/package.json'));
-const { BrowserServerBackend } = require(path.join(playwrightPath, 'lib/mcp/browser/browserServerBackend'));
-const { PrimaryServer } = require('./primaryServer');
 const { OAuth2Client } = require('./oauth');
 const { MCPConnection } = require('./mcpConnection');
+const { UnifiedBackend } = require('./unifiedBackend');
+const { ExtensionServer } = require('./extensionServer');
+const { DirectTransport, ProxyTransport } = require('./transport');
 
 // Helper function for debug logging
 function debugLog(...args) {
@@ -25,12 +23,13 @@ function debugLog(...args) {
 }
 
 class StatefulBackend {
-  constructor(config, extensionContextFactory) {
+  constructor(config) {
     debugLog('[StatefulBackend] Constructor - starting in PASSIVE mode');
     this._config = config;
-    this._extensionContextFactory = extensionContextFactory;
     this._state = 'passive'; // 'passive', 'active', 'connected'
     this._activeBackend = null;
+    this._extensionServer = null; // Our WebSocket server for extension
+    this._proxyConnection = null; // MCPConnection for proxy mode
     this._debugMode = config.debug || false;
     this._isAuthenticated = false; // Will be set based on stored tokens in initialize()
     this._userInfo = null; // Will contain {isPro, email} after authentication
@@ -79,45 +78,6 @@ class StatefulBackend {
     if (this._authCheckPromise) {
       await this._authCheckPromise;
     }
-  }
-
-  /**
-   * Enhance browser tool descriptions for better LLM understanding
-   * Adds context about tab operations and clear prerequisites
-   */
-  _enhanceToolDescriptions(tools) {
-    const enhancements = {
-      browser_close: 'Close the currently active browser tab. The tab must be connected first using browser_tabs. Useful for cleanup after completing automation tasks.',
-      browser_resize: 'Resize the currently active browser tab window to specific dimensions. Requires an active tab connection via browser_tabs.',
-      browser_console_messages: 'Get console messages (logs, warnings, errors) from the active browser tab. Supports filtering by error type, regex patterns, and limiting results. Useful for debugging and monitoring page behavior.',
-      browser_handle_dialog: 'Handle browser dialogs (alerts, confirms, prompts) in the active tab. Can accept or reject the dialog, and optionally provide text for prompts.',
-      browser_evaluate: 'Execute JavaScript code in the active browser tab and return the result. Can run code in page context or on specific elements. Useful for extracting data, modifying page state, or triggering custom functionality.',
-      browser_file_upload: 'Upload files to a file input element in the active tab. Provide absolute paths to files. Requires browser_tabs connection and a file input element to be present.',
-      browser_fill_form: 'Fill multiple form fields at once in the active tab. More efficient than typing into each field individually. Supports text boxes, checkboxes, radio buttons, dropdowns, and sliders.',
-      browser_press_key: 'Press a keyboard key on the currently focused element in the active tab. Useful for Enter, Tab, Arrow keys, etc. Requires browser_tabs connection.',
-      browser_type: 'Type text into an editable element in the active tab. Can submit forms by pressing Enter after typing. More reliable than pressing individual keys.',
-      browser_navigate: 'Navigate the active browser tab to a specified URL. Requires browser_tabs connection. Waits for page load to complete.',
-      browser_navigate_back: 'Go back to the previous page in the active tab browser history. Equivalent to clicking the back button.',
-      browser_reload: 'Reload the current page in the active tab. Useful after making changes or to get fresh data.',
-      browser_network_requests: 'Get all network requests (XHR, fetch, resources) made by the active tab since page load. Supports filtering by URL pattern and HTTP method. Useful for monitoring API calls and tracking data flow.',
-      browser_take_screenshot: 'Capture a screenshot of the active browser tab. Can screenshot the full page, visible viewport, or specific elements. Returns image data. Note: For interactive automation, use browser_snapshot instead as it provides element references.',
-      browser_snapshot: 'Capture an accessibility tree snapshot of the active tab DOM structure. Returns element hierarchy with selectors and text content. Use this instead of screenshots for automation tasks as it provides actionable element references.',
-      browser_click: 'Click on an element in the active tab. Can perform left, right, or double clicks with modifier keys. Specify element by selector, XPath, or text reference.',
-      browser_drag: 'Perform drag and drop between two elements in the active tab. Useful for reordering lists or moving items between containers.',
-      browser_hover: 'Move mouse over an element in the active tab without clicking. Useful for revealing tooltips or triggering hover effects.',
-      browser_select_option: 'Select options in a native HTML <select> dropdown in the active tab. Only works with standard <select> elements, not custom dropdowns. Strings match both option values and labels. Supports multi-select.',
-      browser_wait_for: 'Wait for specific conditions in the active tab before proceeding. Can wait for text to appear/disappear or wait a fixed time period. Useful for handling dynamic content loading and ensuring elements are ready.'
-    };
-
-    return tools.map(tool => {
-      if (enhancements[tool.name]) {
-        return {
-          ...tool,
-          description: enhancements[tool.name]
-        };
-      }
-      return tool;
-    });
   }
 
   async listTools() {
@@ -185,37 +145,11 @@ class StatefulBackend {
       }
     ];
 
-    // Lazy initialize tools backend if not already done
-    // This is needed because initialize() is only called on first tool invocation
-    if (!this._toolsBackend) {
-      debugLog('[StatefulBackend] Tools backend not yet initialized, creating now...');
-      this._toolsBackend = new BrowserServerBackend(this._config, this._extensionContextFactory);
-      // Note: BrowserServerBackend.listTools() doesn't need initialize() to be called
-      // The tools are set in the constructor from filteredTools(config)
-      debugLog('[StatefulBackend] Tools backend created');
-    }
+    // Get browser tools from UnifiedBackend (with null transport, just for schemas)
+    const dummyBackend = new UnifiedBackend(this._config, null);
+    const browserTools = await dummyBackend.listTools();
 
-    // Always return browser tools (even in passive mode) to avoid context overhead
-    let browserTools = [];
-    try {
-      browserTools = await this._toolsBackend.listTools();
-
-      // Filter debug-only tools if not in debug mode
-      // Note: Extension tools (reload/list) are kept visible as they're useful for debugging ANY extension
-      if (!this._debugMode) {
-        browserTools = browserTools.filter(tool =>
-          tool.name !== 'mcp_reload_server' &&
-          tool.name !== 'browser_install'
-        );
-      }
-
-      // Enhance browser tool descriptions for better LLM understanding
-      browserTools = this._enhanceToolDescriptions(browserTools);
-
-      debugLog(`[StatefulBackend] Returning ${browserTools.length} browser tools (filtered: ${!this._debugMode})`);
-    } catch (error) {
-      debugLog('[StatefulBackend] Error getting browser tools:', error);
-    }
+    debugLog(`[StatefulBackend] Returning ${connectionTools.length} connection tools + ${browserTools.length} browser tools`);
 
     return [...connectionTools, ...browserTools];
   }
@@ -238,21 +172,18 @@ class StatefulBackend {
         return await this._handleAuth(rawArguments);
     }
 
-    // For browser tools, use active backend if connected, otherwise use tools backend
-    const backend = this._activeBackend || this._toolsBackend;
-
-    if (!backend) {
+    // Forward to active backend
+    if (!this._activeBackend) {
       return {
         content: [{
           type: 'text',
-          text: `### Error\nBackend not initialized. State: ${this._state}`
+          text: `### Not Connected\n\nPlease call 'connect' first to start browser automation.`
         }],
         isError: true
       };
     }
 
-    // Forward to backend (active or tools)
-    return await backend.callTool(name, rawArguments);
+    return await this._activeBackend.callTool(name, rawArguments);
   }
 
   async _handleConnect(args = {}) {
@@ -282,9 +213,17 @@ class StatefulBackend {
 
   async _becomePrimary() {
     try {
-      debugLog('[StatefulBackend] Creating PrimaryServer...');
+      debugLog('[StatefulBackend] Starting extension server...');
 
-      this._activeBackend = new PrimaryServer(this._config, this._extensionContextFactory);
+      // Create our WebSocket server for extension connection
+      this._extensionServer = new ExtensionServer(5555, '127.0.0.1');
+      await this._extensionServer.start();
+
+      // Create transport using the extension server
+      const transport = new DirectTransport(this._extensionServer);
+
+      // Create unified backend
+      this._activeBackend = new UnifiedBackend(this._config, transport);
       await this._activeBackend.initialize(this._server, this._clientInfo);
 
       this._state = 'active';
@@ -350,8 +289,14 @@ class StatefulBackend {
       // Connect (handles authentication, listing extensions, and connecting to first one)
       await mcpConnection.connect();
 
-      // Store as active backend
-      this._activeBackend = mcpConnection;
+      // Create ProxyTransport using the MCPConnection
+      const transport = new ProxyTransport(mcpConnection);
+
+      // Create unified backend
+      this._activeBackend = new UnifiedBackend(this._config, transport);
+      await this._activeBackend.initialize(this._server, this._clientInfo);
+
+      this._proxyConnection = mcpConnection;
       this._state = 'connected';
 
       debugLog('[StatefulBackend] Successfully connected to proxy and extension');
@@ -395,15 +340,18 @@ class StatefulBackend {
       this._activeBackend = null;
     }
 
-    // Stop the CDPRelayServer to actually close port 5555
-    const cdpRelayServer = this._extensionContextFactory.getCdpRelayServer();
-    if (cdpRelayServer) {
-      debugLog('[StatefulBackend] Stopping CDPRelayServer...');
-      cdpRelayServer.stop();
-      // Clear the relay promise and server reference so a new one is created on next connect
-      this._extensionContextFactory._relayPromise = null;
-      this._extensionContextFactory._cdpRelayServer = null;
-      debugLog('[StatefulBackend] CDPRelayServer stopped, port 5555 closed');
+    // Close proxy connection if we're in proxy mode
+    if (this._proxyConnection) {
+      await this._proxyConnection.close();
+      this._proxyConnection = null;
+    }
+
+    // Stop extension server if in direct mode
+    if (this._extensionServer) {
+      debugLog('[StatefulBackend] Stopping ExtensionServer...');
+      await this._extensionServer.stop();
+      this._extensionServer = null;
+      debugLog('[StatefulBackend] ExtensionServer stopped, port 5555 closed');
     }
 
     this._state = 'passive';
@@ -611,13 +559,16 @@ class StatefulBackend {
     };
   }
 
-  serverClosed() {
+  async serverClosed() {
     debugLog('[StatefulBackend] Server closing...');
     if (this._activeBackend) {
       this._activeBackend.serverClosed();
     }
-    if (this._toolsBackend) {
-      this._toolsBackend.serverClosed();
+    if (this._extensionServer) {
+      await this._extensionServer.stop();
+    }
+    if (this._proxyConnection) {
+      await this._proxyConnection.close();
     }
   }
 }

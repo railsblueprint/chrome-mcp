@@ -214,41 +214,73 @@ class MCPConnection {
   }
 
   /**
-   * Translate MCP tool call to extension command
-   * This mimics what BrowserServerBackend does
+   * Translate MCP tool to extension command (JSON-RPC over proxy)
    */
   _translateToolToCommand(name, args) {
-    // Handle browser_tabs tool
-    if (name === 'browser_tabs') {
-      const action = args.action;
-
-      if (action === 'new') {
-        return {
-          method: 'createTab',
-          params: {
-            url: args.url,
-            activate: true,
-            stealth: args.stealth || false
-          }
-        };
-      } else if (action === 'list') {
-        return {
-          method: 'getTabs',
-          params: {}
-        };
-      } else if (action === 'close') {
-        return {
-          method: 'closeTab',
-          params: {}
-        };
-      }
+    // Navigation
+    if (name === 'browser_navigate') {
+      return {
+        method: 'forwardCDPCommand',
+        params: {
+          method: 'Page.navigate',
+          params: { url: args.url }
+        }
+      };
     }
 
-    // For CDP-based tools, keep as-is (they use forwardCDPCommand)
-    return {
-      method: name,
-      params: args
-    };
+    if (name === 'browser_goBack') {
+      return {
+        method: 'forwardCDPCommand',
+        params: {
+          method: 'Page.goBack',
+          params: {}
+        }
+      };
+    }
+
+    if (name === 'browser_goForward') {
+      return {
+        method: 'forwardCDPCommand',
+        params: {
+          method: 'Page.goForward',
+          params: {}
+        }
+      };
+    }
+
+    // Screenshot
+    if (name === 'browser_take_screenshot') {
+      return {
+        method: 'forwardCDPCommand',
+        params: {
+          method: 'Page.captureScreenshot',
+          params: {
+            format: args.type || 'png',
+            quality: args.quality,
+            captureBeyondViewport: args.fullPage || false
+          }
+        }
+      };
+    }
+
+    // JavaScript evaluation
+    if (name === 'browser_evaluate') {
+      const expression = args.function || args.expression;
+      return {
+        method: 'forwardCDPCommand',
+        params: {
+          method: 'Runtime.evaluate',
+          params: {
+            expression: `(${expression})()`,
+            returnByValue: true,
+            awaitPromise: true
+          }
+        }
+      };
+    }
+
+    // For now, unsupported tools
+    throw new Error(`Tool '${name}' is not yet supported in proxy mode`);
   }
 
   /**

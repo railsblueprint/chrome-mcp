@@ -22,19 +22,53 @@ require('dotenv').config(); // Fallback to .env if .env.local doesn't exist
 // Enable stealth mode patches by default (uses generic names instead of Playwright-specific ones)
 process.env.STEALTH_MODE = 'true';
 
-const { program } = require('playwright-core/lib/utilsBundle');
-const path = require('path');
-// Use require.resolve to find playwright modules in node_modules (works with npx)
-const playwrightPath = path.dirname(require.resolve('playwright/package.json'));
-const mcpServer = require(path.join(playwrightPath, 'lib/mcp/sdk/server'));
-const { resolveCLIConfig } = require(path.join(playwrightPath, 'lib/mcp/browser/config'));
-const { ExtensionContextFactory } = require(path.join(playwrightPath, 'lib/mcp/extension/extensionContextFactory'));
-const { setupExitWatchdog } = require(path.join(playwrightPath, 'lib/mcp/browser/watchdog'));
+const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
+const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
+const { ListToolsRequestSchema, CallToolRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
+const { Command } = require('commander');
+const { StatefulBackend } = require('./src/statefulBackend');
 
 const packageJSON = require('./package.json');
 
-// Custom action for --extension mode with stateful connection management
-async function extensionAction(options) {
+// Simple config resolver
+function resolveConfig(options) {
+  return {
+    debug: options.debug === true,
+    server: {
+      name: 'Blueprint MCP for Chrome',
+      version: packageJSON.version
+    }
+  };
+}
+
+// Simple exit watchdog
+function setupExitWatchdog() {
+  let cleanupDone = false;
+
+  const cleanup = () => {
+    if (cleanupDone) return;
+    cleanupDone = true;
+
+    if (global.DEBUG_MODE) {
+      console.error('[cli.js] Cleanup initiated');
+    }
+
+    // Give 5 seconds for graceful shutdown
+    setTimeout(() => {
+      if (global.DEBUG_MODE) {
+        console.error('[cli.js] Forcing exit after timeout');
+      }
+      process.exit(0);
+    }, 5000);
+  };
+
+  process.stdin.on('close', cleanup);
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+}
+
+// Main action
+async function main(options) {
   setupExitWatchdog();
 
   // Store debug mode globally for access by other modules
@@ -46,58 +80,76 @@ async function extensionAction(options) {
     console.error('[cli.js] Debug mode: ENABLED');
   }
 
-  const config = await resolveCLIConfig(options);
+  const config = resolveConfig(options);
 
-  // Add debug flag to config for access by backends
-  config.debug = global.DEBUG_MODE;
-
-  const extensionContextFactory = new ExtensionContextFactory(
-    config.browser.launchOptions.channel || 'chrome',
-    config.browser.userDataDir,
-    config.browser.launchOptions.executablePath,
-    config.server
-  );
-
-  // Use StatefulBackend that manages connection states
-  const { StatefulBackend } = require('./src/statefulBackend');
-
-  const serverBackendFactory = {
-    name: 'Blueprint MCP for Chrome',
-    nameInConfig: 'blueprint-chrome-mcp',
-    version: packageJSON.version,
-    create: () => {
-      if (global.DEBUG_MODE) {
-        console.error('[cli.js] Creating StatefulBackend');
-      }
-      return new StatefulBackend(config, extensionContextFactory);
-    }
-  };
+  // Create StatefulBackend
+  const backend = new StatefulBackend(config);
 
   if (global.DEBUG_MODE) {
-    console.error('[cli.js] Calling mcpServer.start...');
+    console.error('[cli.js] Creating MCP Server...');
   }
 
-  // Force stdio transport for extension mode (don't start HTTP server)
-  const mcpServerConfig = {
-    ...config.server,
-    port: undefined  // Force stdio transport instead of HTTP/SSE
-  };
+  // Create MCP Server
+  const server = new Server(
+    {
+      name: config.server.name,
+      version: config.server.version
+    },
+    {
+      capabilities: {
+        tools: {}
+      }
+    }
+  );
 
-  await mcpServer.start(serverBackendFactory, mcpServerConfig);
+  // Register handlers
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const tools = await backend.listTools();
+    return { tools };
+  });
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+    return await backend.callTool(name, args);
+  });
+
+  // Initialize backend
+  const clientInfo = {}; // Will be populated on connection
+  await backend.initialize(server, clientInfo);
+
+  if (global.DEBUG_MODE) {
+    console.error('[cli.js] Starting stdio transport...');
+  }
+
+  // Start stdio transport
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
 
   if (global.DEBUG_MODE) {
     console.error('[cli.js] MCP server ready (passive mode)');
   }
+
+  // Handle shutdown
+  process.on('SIGINT', async () => {
+    if (global.DEBUG_MODE) {
+      console.error('[cli.js] Shutting down...');
+    }
+    await backend.serverClosed();
+    await server.close();
+    process.exit(0);
+  });
 }
 
 // Set up command
+const program = new Command();
+
 program
   .version('Version ' + packageJSON.version)
   .name('Blueprint MCP for Chrome')
   .description('MCP server for Chrome browser automation using the Blueprint MCP extension')
   .option('--debug', 'Enable debug mode (shows reload/extension tools and verbose logging)')
   .action(async (options) => {
-    await extensionAction(options);
+    await main(options);
   });
 
-void program.parseAsync(process.argv);
+program.parse(process.argv);
