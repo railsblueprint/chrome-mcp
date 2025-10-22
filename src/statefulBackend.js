@@ -26,13 +26,20 @@ class StatefulBackend {
   constructor(config) {
     debugLog('[StatefulBackend] Constructor - starting in PASSIVE mode');
     this._config = config;
-    this._state = 'passive'; // 'passive', 'active', 'connected'
+    this._state = 'passive'; // 'passive', 'active', 'connected', 'authenticated_waiting'
     this._activeBackend = null;
     this._extensionServer = null; // Our WebSocket server for extension
     this._proxyConnection = null; // MCPConnection for proxy mode
     this._debugMode = config.debug || false;
     this._isAuthenticated = false; // Will be set based on stored tokens in initialize()
     this._userInfo = null; // Will contain {isPro, email} after authentication
+    this._clientId = null; // Human-readable identifier from enable command
+    this._availableBrowsers = null; // Cached list of available browsers from proxy (when multiple found)
+    this._connectedBrowserName = null; // Name of currently connected browser
+    this._attachedTab = null; // Currently attached tab {index, title, url}
+    this._browserDisconnected = false; // Track if browser extension disconnected (proxy still connected)
+    this._lastConnectedBrowserId = null; // Remember browser ID for auto-reconnect
+    this._lastAttachedTab = null; // Remember last attached tab for auto-reattach
     this._oauthClient = new OAuth2Client({
       authBaseUrl: process.env.AUTH_BASE_URL || 'https://mcp-for-chrome.railsblueprint.com'
     });
@@ -80,18 +87,94 @@ class StatefulBackend {
     }
   }
 
+  /**
+   * Generate status header for all responses (1-liner)
+   */
+  _getStatusHeader() {
+    const parts = [];
+
+    // State
+    if (this._state === 'passive') {
+      return '🔴 Disabled\n---\n\n';
+    }
+
+    if (this._state === 'authenticated_waiting') {
+      return '⏳ Waiting for browser selection\n---\n\n';
+    }
+
+    // Mode
+    const mode = this._isAuthenticated ? 'PRO' : 'Free';
+    parts.push(`✅ ${mode}`);
+
+    // Browser - show disconnected status if browser disconnected
+    if (this._browserDisconnected) {
+      parts.push(`⚠️ Browser Disconnected`);
+    } else if (this._connectedBrowserName) {
+      parts.push(`🌐 ${this._connectedBrowserName}`);
+    }
+
+    // Tab - only show if browser not disconnected
+    if (!this._browserDisconnected) {
+      if (this._attachedTab) {
+        const tabTitle = this._attachedTab.title || 'Untitled';
+        const shortTitle = tabTitle.length > 40 ? tabTitle.substring(0, 37) + '...' : tabTitle;
+        parts.push(`📄 Tab ${this._attachedTab.index}: ${shortTitle}`);
+      } else {
+        parts.push(`⚠️ No tab attached`);
+      }
+    }
+
+    return parts.join(' | ') + '\n---\n\n';
+  }
+
   async listTools() {
     debugLog(`[StatefulBackend] listTools() - state: ${this._state}, authenticated: ${this._isAuthenticated}, debug: ${this._debugMode}`);
 
     // Always return connection management tools
     const connectionTools = [
       {
-        name: 'connect',
-        description: 'Activate browser automation by connecting to the Chrome extension. Must be called before using any browser_ tools. After connecting, use browser_tabs to select or create tabs.',
+        name: 'enable',
+        description: 'STEP 1: Enable browser automation. Activates the Chrome extension connection and makes browser_ tools available. Provide a client_id (e.g., your project name) for stable connection tracking. In PRO mode with multiple browsers, this will return a list to choose from.',
         inputSchema: {
           type: 'object',
-          properties: {},
-          required: []
+          properties: {
+            client_id: {
+              type: 'string',
+              description: 'Human-readable identifier for this MCP client (e.g., "my-project", "task-automation"). Used for stable connection IDs and reconnection after restarts.'
+            }
+          },
+          required: ['client_id']
+        },
+        annotations: {
+          title: 'Enable browser automation',
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false
+        }
+      },
+      {
+        name: 'disable',
+        description: 'Disable browser automation and return to passive mode. Closes Chrome extension connection. After this, browser_ tools will not work until you call enable again.',
+        inputSchema: { type: 'object', properties: {}, required: [] },
+        annotations: {
+          title: 'Disable browser automation',
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false
+        }
+      },
+      {
+        name: 'browser_connect',
+        description: 'Connect to a specific browser when multiple browsers are available (PRO mode only). Called after enable returns a list of browsers to choose from.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            browser_id: {
+              type: 'string',
+              description: 'Browser extension ID from the list returned by enable'
+            }
+          },
+          required: ['browser_id']
         },
         annotations: {
           title: 'Connect to browser',
@@ -101,19 +184,8 @@ class StatefulBackend {
         }
       },
       {
-        name: 'disconnect',
-        description: 'Stop browser automation and close the connection to the Chrome extension. Returns server to passive mode where browser_ tools are unavailable.',
-        inputSchema: { type: 'object', properties: {}, required: [] },
-        annotations: {
-          title: 'Disconnect from browser',
-          readOnlyHint: false,
-          destructiveHint: false,
-          openWorldHint: false
-        }
-      },
-      {
         name: 'status',
-        description: 'Check whether browser automation is currently active or passive. Shows if connect has been called and browser_ tools are available.',
+        description: 'Check current state: passive (not connected) or active/connected (browser automation enabled). Use this to verify connection status before calling browser_ tools.',
         inputSchema: { type: 'object', properties: {}, required: [] },
         annotations: {
           title: 'Connection status',
@@ -159,11 +231,14 @@ class StatefulBackend {
 
     // Handle connection management tools
     switch (name) {
-      case 'connect':
-        return await this._handleConnect(rawArguments);
+      case 'enable':
+        return await this._handleEnable(rawArguments);
 
-      case 'disconnect':
-        return await this._handleDisconnect();
+      case 'disable':
+        return await this._handleDisable();
+
+      case 'browser_connect':
+        return await this._handleBrowserConnect(rawArguments);
 
       case 'status':
         return await this._handleStatus();
@@ -177,7 +252,7 @@ class StatefulBackend {
       return {
         content: [{
           type: 'text',
-          text: `### Not Connected\n\nPlease call 'connect' first to start browser automation.`
+          text: `### ⚠️ Browser Automation Not Active\n\n**Current State:** Passive (disabled)\n\n**You must call \`enable\` first to activate browser automation.**\n\nAfter enabling:\n1. Browser automation will be active\n2. Then use \`browser_tabs\` to select or create a tab\n3. Then you can use other browser tools (navigate, interact, etc.)`
         }],
         isError: true
       };
@@ -186,15 +261,30 @@ class StatefulBackend {
     return await this._activeBackend.callTool(name, rawArguments);
   }
 
-  async _handleConnect(args = {}) {
+  async _handleEnable(args = {}) {
+    // Validate client_id parameter
+    if (!args.client_id || typeof args.client_id !== 'string' || args.client_id.trim().length === 0) {
+      return {
+        content: [{
+          type: 'text',
+          text: `### ⚠️ Missing Required Parameter\n\n**Error:** \`client_id\` parameter is required\n\n**Example:**\n\`\`\`\nenable client_id='my-project'\n\`\`\`\n\nProvide a human-readable identifier (e.g., your project name). This enables stable connection IDs and seamless reconnection after restarts.`
+        }],
+        isError: true
+      };
+    }
+
     if (this._state !== 'passive') {
       return {
         content: [{
           type: 'text',
-          text: `### Already Connected\nCurrent state: ${this._state}\n\nUse disconnect first to return to passive mode.`
+          text: `### ✅ Already Enabled\n\n**Current State:** ${this._state}\n**Client ID:** ${this._clientId || 'unknown'}\n\n**Browser automation is already active!**\n\nYou can now use browser tools:\n- \`browser_tabs\` - List, select, or create tabs\n- \`browser_navigate\` - Navigate to URLs\n- \`browser_interact\` - Click, type, etc.\n- And more...\n\nTo restart, call \`disable\` first.`
         }]
       };
     }
+
+    // Store client_id for this session
+    this._clientId = args.client_id.trim();
+    debugLog('[StatefulBackend] Client ID set to:', this._clientId);
 
     // Wait for auth check to complete before deciding connection mode
     await this._ensureAuthChecked();
@@ -244,14 +334,22 @@ class StatefulBackend {
       this._extensionServer = new ExtensionServer(5555, '127.0.0.1');
       await this._extensionServer.start();
 
+      // Handle extension reconnections (e.g., after extension reload)
+      this._extensionServer.onReconnect = () => {
+        debugLog('[StatefulBackend] Extension reconnected, resetting attached tab state...');
+        this._attachedTab = null; // Clear attached tab since extension reloaded
+        // Keep the same state and backend since the server connection is still valid
+      };
+
       // Create transport using the extension server
       const transport = new DirectTransport(this._extensionServer);
 
       // Create unified backend
       this._activeBackend = new UnifiedBackend(this._config, transport);
-      await this._activeBackend.initialize(this._server, this._clientInfo);
+      await this._activeBackend.initialize(this._server, this._clientInfo, this);
 
       this._state = 'active';
+      this._connectedBrowserName = 'Local Chrome';  // Store browser name for standalone mode
 
       debugLog('[StatefulBackend] Standalone mode activated');
 
@@ -263,9 +361,19 @@ class StatefulBackend {
       return {
         content: [{
           type: 'text',
-          text: `### ✅ Connected Successfully!\n\n` +
-                `You can now use browser automation tools.\n\n` +
-                `Use browser_tabs to connect to existing tabs or create new ones. Stealth mode can be enabled per-tab to avoid bot detection.`
+          text: this._getStatusHeader() +
+                `### ✅ Browser Automation Activated!\n\n` +
+                `**State:** Connected (standalone mode)\n` +
+                `**Browser:** ${this._connectedBrowserName}\n\n` +
+                `**Next Steps:**\n` +
+                `1. Call \`browser_tabs action='list'\` to see available tabs\n` +
+                `2. Call \`browser_tabs action='attach' index=N\` to attach to a tab\n` +
+                `3. Or call \`browser_tabs action='new' url='https://...'\` to create a new tab\n\n` +
+                `After attaching to a tab, you can use:\n` +
+                `- \`browser_navigate\` - Navigate to URLs\n` +
+                `- \`browser_interact\` - Click, type, etc.\n` +
+                `- \`browser_snapshot\` - Get page content\n` +
+                `- And more...`
         }]
       };
     } catch (error) {
@@ -297,6 +405,7 @@ class StatefulBackend {
   async _connectToProxy() {
     try {
       debugLog('[StatefulBackend] Connecting to remote proxy:', this._userInfo.connectionUrl);
+      debugLog('[StatefulBackend] Client ID:', this._clientId);
 
       // Get stored tokens for authentication
       const tokens = await this._oauthClient.getStoredTokens();
@@ -304,65 +413,141 @@ class StatefulBackend {
         throw new Error('No access token found - please authenticate first');
       }
 
-      // Create MCPConnection in proxy mode
+      // Create temporary MCPConnection to list browsers
       const mcpConnection = new MCPConnection({
         mode: 'proxy',
         url: this._userInfo.connectionUrl,
-        accessToken: tokens.accessToken
+        accessToken: tokens.accessToken,
+        clientId: this._clientId
       });
 
-      // Connect (handles authentication, listing extensions, and connecting to first one)
-      await mcpConnection.connect();
+      // Connect and authenticate, then list extensions
+      await mcpConnection._connectWebSocket(this._userInfo.connectionUrl);
 
-      // Monitor connection close events
-      mcpConnection.onClose = (code, reason) => {
-        debugLog('[StatefulBackend] Connection closed:', code, reason);
-        console.error('[StatefulBackend] ⚠️  Connection lost - resetting to passive state');
-        this._state = 'passive';
-        this._activeBackend = null;
-        this._proxyConnection = null;
-      };
+      const handshakeParams = { access_token: tokens.accessToken };
+      if (this._clientId) {
+        handshakeParams.client_id = this._clientId;
+      }
 
-      // Create ProxyTransport using the MCPConnection
-      const transport = new ProxyTransport(mcpConnection);
+      await mcpConnection.sendRequest('mcp_handshake', handshakeParams);
+      debugLog('[StatefulBackend] Authenticated with proxy');
 
-      // Create unified backend
-      this._activeBackend = new UnifiedBackend(this._config, transport);
-      await this._activeBackend.initialize(this._server, this._clientInfo);
+      // List available extensions
+      const extensionsResult = await mcpConnection.sendRequest('list_extensions', {});
+      debugLog('[StatefulBackend] Available extensions:', extensionsResult);
 
-      this._proxyConnection = mcpConnection;
-      this._state = 'connected';
+      if (!extensionsResult || !extensionsResult.extensions || extensionsResult.extensions.length === 0) {
+        await mcpConnection.close();
+        throw new Error('No browser extensions are connected to the proxy.');
+      }
 
-      debugLog('[StatefulBackend] Successfully connected to proxy and extension');
+      const browsers = extensionsResult.extensions;
 
-      return {
-        content: [{
-          type: 'text',
-          text: `### ✅ Connected to Proxy\n\n` +
-                `**Email:** ${this._userInfo.email}\n` +
-                `**Proxy:** ${this._userInfo.connectionUrl}\n\n` +
-                `Your Chrome browser is now accessible via the remote proxy. You can use all MCP tools.`
-        }]
-      };
+      if (browsers.length === 1) {
+        // Single browser - auto-connect
+        debugLog('[StatefulBackend] Single browser found, auto-connecting:', browsers[0].name);
+
+        const connectResult = await mcpConnection.sendRequest('connect', { extension_id: browsers[0].id });
+        mcpConnection._connectionId = connectResult.connection_id;
+        mcpConnection._authenticated = true;
+        mcpConnection._connected = true;
+
+        // Monitor connection close events
+        mcpConnection.onClose = (code, reason) => {
+          debugLog('[StatefulBackend] Connection closed:', code, reason);
+          console.error(`[StatefulBackend] ⚠️  Connection to browser "${browsers[0].name}" lost - resetting to passive state`);
+          this._state = 'passive';
+          this._activeBackend = null;
+          this._proxyConnection = null;
+        };
+
+        // Create ProxyTransport using the MCPConnection
+        const transport = new ProxyTransport(mcpConnection);
+
+        // Create unified backend
+        this._activeBackend = new UnifiedBackend(this._config, transport);
+        await this._activeBackend.initialize(this._server, this._clientInfo, this);
+
+        this._proxyConnection = mcpConnection;
+        this._state = 'connected';
+        this._connectedBrowserName = browsers[0].name || 'Chrome';  // Store browser name
+
+        debugLog('[StatefulBackend] Successfully auto-connected to single browser');
+
+        return {
+          content: [{
+            type: 'text',
+            text: this._getStatusHeader() +
+                  `### ✅ Browser Automation Activated!\n\n` +
+                  `**State:** Connected (proxy mode)\n` +
+                  `**Email:** ${this._userInfo.email}\n` +
+                  `**Browser:** ${this._connectedBrowserName}\n` +
+                  `**Client ID:** ${this._clientId}\n\n` +
+                  `**Next Steps:**\n` +
+                  `1. Call \`browser_tabs action='list'\` to see available tabs\n` +
+                  `2. Call \`browser_tabs action='attach' index=N\` to attach to a tab\n` +
+                  `3. Or call \`browser_tabs action='new' url='https://...'\` to create a new tab\n\n` +
+                  `After attaching to a tab, you can use:\n` +
+                  `- \`browser_navigate\` - Navigate to URLs\n` +
+                  `- \`browser_interact\` - Click, type, etc.\n` +
+                  `- \`browser_snapshot\` - Get page content\n` +
+                  `- And more...`
+          }]
+        };
+      } else {
+        // Multiple browsers - close connection and wait for user selection
+        debugLog('[StatefulBackend] Multiple browsers found, waiting for user selection');
+        await mcpConnection.close();
+
+        // Store browsers and enter waiting state
+        this._availableBrowsers = browsers;
+        this._state = 'authenticated_waiting';
+
+        // Format the browser list
+        let browserList = '### 🔍 Multiple Browsers Found\n\n';
+        browserList += `Found ${browsers.length} Chrome browsers connected to the proxy:\n\n`;
+
+        browsers.forEach((browser, index) => {
+          browserList += `${index + 1}. **${browser.name || 'Chrome Browser'}**\n`;
+          browserList += `   - ID: \`${browser.id}\`\n`;
+          if (browser.version) {
+            browserList += `   - Version: ${browser.version}\n`;
+          }
+          browserList += `\n`;
+        });
+
+        browserList += `\n**Next Step:**\n`;
+        browserList += `Call \`browser_connect browser_id='<id>'\` to connect to your chosen browser.\n\n`;
+        browserList += `**Example:**\n`;
+        browserList += `\`\`\`\nbrowser_connect browser_id='${browsers[0].id}'\n\`\`\``;
+
+        return {
+          content: [{
+            type: 'text',
+            text: browserList
+          }]
+        };
+      }
     } catch (error) {
       debugLog('[StatefulBackend] Failed to connect to proxy:', error);
 
       return {
         content: [{
           type: 'text',
-          text: `### Connection Failed\n\nFailed to connect to remote proxy:\n${error.message}`
+          text: `### ❌ Connection Failed\n\nFailed to connect to remote proxy:\n${error.message}`
         }],
         isError: true
       };
     }
   }
 
-  async _handleDisconnect() {
+  async _handleDisable() {
     if (this._state === 'passive') {
       return {
         content: [{
           type: 'text',
-          text: `### Already Disconnected\n\nCurrent state: passive`
+          text: this._getStatusHeader() +
+                `### Already Disabled\n\n**State:** Passive (disabled)\n\nBrowser automation is not active. Call \`enable\` to activate it.`
         }]
       };
     }
@@ -389,6 +574,8 @@ class StatefulBackend {
     }
 
     this._state = 'passive';
+    this._connectedBrowserName = null;  // Clear browser name
+    this._attachedTab = null;  // Clear attached tab
 
     // Notify client that tool list has changed (back to connection tools only, don't await - send async)
     this._notifyToolsListChanged().catch(err =>
@@ -398,7 +585,8 @@ class StatefulBackend {
     return {
       content: [{
         type: 'text',
-        text: `### Disconnected\n\nState: passive\n\nUse connect to reconnect.`
+        text: this._getStatusHeader() +
+              `### ✅ Disabled Successfully\n\n**State:** Passive (disabled)\n\nBrowser automation has been deactivated. Browser_ tools are no longer available.\n\nTo reactivate, call \`enable\` again.`
       }]
     };
   }
@@ -408,17 +596,222 @@ class StatefulBackend {
       return {
         content: [{
           type: 'text',
-          text: `### ❌ Not Connected\n\nUse the \`connect\` tool to start browser automation.`
+          text: this._getStatusHeader() +
+                `### ❌ Disabled\n\n**State:** Passive\n\nBrowser automation is not active.\n\nUse the \`enable\` tool to activate browser automation.`
         }]
       };
+    }
+
+    if (this._state === 'authenticated_waiting') {
+      return {
+        content: [{
+          type: 'text',
+          text: this._getStatusHeader() +
+                `### ⏳ Waiting for Browser Selection\n\n**State:** Authenticated, waiting\n\nMultiple browsers found. Use \`browser_connect\` to choose one.`
+        }]
+      };
+    }
+
+    const mode = this._isAuthenticated ? 'PRO' : 'Free';
+    let statusText = `### ✅ Enabled\n\n`;
+    statusText += `**Mode:** ${mode}\n`;
+
+    if (this._connectedBrowserName) {
+      statusText += `**Browser:** ${this._connectedBrowserName}\n`;
+    }
+
+    if (this._attachedTab) {
+      statusText += `**Attached Tab:** #${this._attachedTab.index} - ${this._attachedTab.title || 'Untitled'}\n`;
+      statusText += `**Tab URL:** ${this._attachedTab.url || 'N/A'}\n\n`;
+      statusText += `✅ Ready for automation!`;
+    } else {
+      statusText += `\n⚠️  No tab attached yet. Use \`browser_tabs action='attach' index=N\` to attach to a tab.`;
     }
 
     return {
       content: [{
         type: 'text',
-        text: `### ✅ Connected\n\nBrowser automation is ready!\n\nUse browser_tabs to connect to existing tabs or create new ones with optional stealth mode.`
+        text: this._getStatusHeader() + statusText
       }]
     };
+  }
+
+  async _handleBrowserConnect(args) {
+    debugLog('[StatefulBackend] Handling browser_connect...');
+
+    // Validate browser_id parameter
+    if (!args?.browser_id || typeof args.browser_id !== 'string') {
+      return {
+        content: [{
+          type: 'text',
+          text: `### ⚠️ Missing Required Parameter\n\n` +
+                `**Error:** \`browser_id\` parameter is required\n\n` +
+                `**Example:**\n` +
+                `\`\`\`\nbrowser_connect browser_id='chrome-abc123...'\n\`\`\`\n\n` +
+                `Use the browser ID from the list shown by \`enable\`.`
+        }],
+        isError: true
+      };
+    }
+
+    // Check if we're in the right state
+    if (this._state !== 'authenticated_waiting') {
+      return {
+        content: [{
+          type: 'text',
+          text: `### ⚠️ Invalid State\n\n` +
+                `**Current State:** ${this._state}\n\n` +
+                `\`browser_connect\` can only be called after \`enable\` returns a list of multiple browsers.\n\n` +
+                `**Correct Flow:**\n` +
+                `1. Call \`enable client_id='my-project'\`\n` +
+                `2. If multiple browsers found, you'll get a list\n` +
+                `3. Then call \`browser_connect browser_id='...'\``
+        }],
+        isError: true
+      };
+    }
+
+    // Check if we have cached browsers list
+    if (!this._availableBrowsers || this._availableBrowsers.length === 0) {
+      return {
+        content: [{
+          type: 'text',
+          text: `### ⚠️ No Browsers Available\n\n` +
+                `No browsers list cached. Please call \`enable\` again.`
+        }],
+        isError: true
+      };
+    }
+
+    const browserId = args.browser_id.trim();
+
+    // Find the selected browser
+    const selectedBrowser = this._availableBrowsers.find(b => b.id === browserId);
+    if (!selectedBrowser) {
+      const availableIds = this._availableBrowsers.map(b => `- \`${b.id}\``).join('\n');
+      return {
+        content: [{
+          type: 'text',
+          text: `### ⚠️ Browser Not Found\n\n` +
+                `Browser ID \`${browserId}\` not found in available browsers.\n\n` +
+                `**Available browser IDs:**\n${availableIds}`
+        }],
+        isError: true
+      };
+    }
+
+    try {
+      debugLog('[StatefulBackend] Connecting to selected browser:', selectedBrowser.name);
+
+      // Get stored tokens
+      const tokens = await this._oauthClient.getStoredTokens();
+      if (!tokens || !tokens.accessToken) {
+        throw new Error('No access token found - please authenticate first');
+      }
+
+      // Create new MCPConnection for this browser
+      const mcpConnection = new MCPConnection({
+        mode: 'proxy',
+        url: this._userInfo.connectionUrl,
+        accessToken: tokens.accessToken,
+        clientId: this._clientId
+      });
+
+      // Connect and authenticate
+      await mcpConnection._connectWebSocket(this._userInfo.connectionUrl);
+
+      const handshakeParams = { access_token: tokens.accessToken };
+      if (this._clientId) {
+        handshakeParams.client_id = this._clientId;
+      }
+
+      await mcpConnection.sendRequest('mcp_handshake', handshakeParams);
+
+      // Connect to the selected browser
+      const connectResult = await mcpConnection.sendRequest('connect', { extension_id: browserId });
+      mcpConnection._connectionId = connectResult.connection_id;
+      mcpConnection._authenticated = true;
+      mcpConnection._connected = true;
+
+      // Monitor browser disconnection (extension disconnects, proxy stays connected)
+      mcpConnection.onBrowserDisconnected = (params) => {
+        debugLog('[StatefulBackend] Browser disconnected:', params);
+        console.error(`[StatefulBackend] ⚠️  Browser extension "${this._connectedBrowserName}" disconnected`);
+
+        // Mark browser as disconnected but keep proxy connection alive
+        this._browserDisconnected = true;
+
+        // Remember what we were connected to for auto-reconnect
+        this._lastConnectedBrowserId = this._lastConnectedBrowserId || selectedBrowser.id;
+        this._lastAttachedTab = this._attachedTab; // Remember current tab
+
+        // Clear current connection state
+        this._attachedTab = null;
+      };
+
+      // Monitor connection close events (proxy connection lost)
+      mcpConnection.onClose = (code, reason) => {
+        debugLog('[StatefulBackend] Proxy connection closed:', code, reason);
+        console.error(`[StatefulBackend] ⚠️  Proxy connection lost - resetting to passive state`);
+        this._state = 'passive';
+        this._activeBackend = null;
+        this._proxyConnection = null;
+        this._attachedTab = null;
+        this._connectedBrowserName = null;
+        this._browserDisconnected = false;
+        this._lastConnectedBrowserId = null;
+        this._lastAttachedTab = null;
+      };
+
+      // Create ProxyTransport using the MCPConnection
+      const transport = new ProxyTransport(mcpConnection);
+
+      // Create unified backend
+      this._activeBackend = new UnifiedBackend(this._config, transport);
+      await this._activeBackend.initialize(this._server, this._clientInfo, this);
+
+      this._proxyConnection = mcpConnection;
+      this._state = 'connected';
+      this._connectedBrowserName = selectedBrowser.name || 'Chrome';  // Store browser name
+      this._lastConnectedBrowserId = selectedBrowser.id; // Remember for auto-reconnect
+      this._browserDisconnected = false; // Reset disconnected flag
+      this._availableBrowsers = null; // Clear the cache
+
+      debugLog('[StatefulBackend] Successfully connected to selected browser');
+
+      return {
+        content: [{
+          type: 'text',
+          text: this._getStatusHeader() +
+                `### ✅ Browser Automation Activated!\n\n` +
+                `**State:** Connected (proxy mode)\n` +
+                `**Email:** ${this._userInfo.email}\n` +
+                `**Browser:** ${this._connectedBrowserName}\n` +
+                `**Client ID:** ${this._clientId}\n\n` +
+                `**Next Steps:**\n` +
+                `1. Call \`browser_tabs action='list'\` to see available tabs\n` +
+                `2. Call \`browser_tabs action='attach' index=N\` to attach to a tab\n` +
+                `3. Or call \`browser_tabs action='new' url='https://...'\` to create a new tab\n\n` +
+                `After attaching to a tab, you can use:\n` +
+                `- \`browser_navigate\` - Navigate to URLs\n` +
+                `- \`browser_interact\` - Click, type, etc.\n` +
+                `- \`browser_snapshot\` - Get page content\n` +
+                `- And more...`
+        }]
+      };
+    } catch (error) {
+      debugLog('[StatefulBackend] Failed to connect to browser:', error);
+      this._state = 'passive';
+      this._availableBrowsers = null;
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### ❌ Connection Failed\n\nFailed to connect to browser "${selectedBrowser.name}":\n${error.message}\n\nPlease try calling \`enable\` again.`
+        }],
+        isError: true
+      };
+    }
   }
 
   async _notifyToolsListChanged() {

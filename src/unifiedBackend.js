@@ -17,10 +17,94 @@ class UnifiedBackend {
     this._transport = transport;
   }
 
-  async initialize(server, clientInfo) {
+  async initialize(server, clientInfo, statefulBackend) {
     this._server = server;
     this._clientInfo = clientInfo;
+    // Store reference to StatefulBackend for updating attached tab info and status headers
+    this._statefulBackend = statefulBackend;
     debugLog('Initialized');
+  }
+
+  /**
+   * Auto-reconnect to browser if disconnected
+   * @returns {Promise<boolean>} true if reconnected or already connected, false if failed
+   */
+  async _autoReconnectIfNeeded() {
+    // Only needed in proxy mode when browser is disconnected
+    if (!this._statefulBackend || !this._statefulBackend._browserDisconnected) {
+      return true; // Already connected or not needed
+    }
+
+    const browserId = this._statefulBackend._lastConnectedBrowserId;
+    if (!browserId) {
+      debugLog('No browser ID to reconnect to');
+      return false;
+    }
+
+    debugLog('Attempting auto-reconnect to browser:', browserId);
+
+    try {
+      // Get proxy connection (should still be alive)
+      const mcpConnection = this._statefulBackend._proxyConnection;
+      if (!mcpConnection || !mcpConnection._connected) {
+        debugLog('Proxy connection not available for reconnect');
+        return false;
+      }
+
+      // Try to reconnect to the same browser
+      const connectResult = await mcpConnection.sendRequest('connect', { extension_id: browserId }, 5000);
+      mcpConnection._connectionId = connectResult.connection_id;
+
+      debugLog('Auto-reconnect successful!');
+
+      // Clear disconnected flag
+      this._statefulBackend._browserDisconnected = false;
+
+      // Try to reattach to last tab if we remember it
+      if (this._statefulBackend._lastAttachedTab) {
+        const lastTab = this._statefulBackend._lastAttachedTab;
+        debugLog('Attempting to reattach to last tab:', lastTab);
+
+        try {
+          // Try to reattach using the tab index
+          await mcpConnection.sendRequest('selectTab', { tabIndex: lastTab.index }, 5000);
+
+          // Reattachment successful - restore the tab info
+          this._statefulBackend._attachedTab = lastTab;
+          this._statefulBackend._lastAttachedTab = null; // Clear the backup
+
+          debugLog('Successfully reattached to tab', lastTab.index);
+        } catch (error) {
+          debugLog('Failed to reattach to last tab:', error.message);
+          // Don't fail the whole operation if reattach fails
+          // Just clear the last tab info and continue without a tab attached
+          this._statefulBackend._lastAttachedTab = null;
+        }
+      }
+
+      return true;
+    } catch (error) {
+      debugLog('Auto-reconnect failed:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Add status header to response (if available)
+   */
+  _addStatusHeader(response) {
+    // Add status header to all browser tool responses
+    if (this._statefulBackend && response && response.content) {
+      // Find the first text content item and prepend status header with response status
+      const textContent = response.content.find(c => c && c.type === 'text');
+      if (textContent && textContent.text) {
+        const statusEmoji = response.isError ? '❌' : '✅';
+        const statusText = response.isError ? 'Error' : 'Success';
+        const header = this._statefulBackend._getStatusHeader().replace('\n---\n\n', ` | ${statusEmoji} ${statusText}\n---\n\n`);
+        textContent.text = header + textContent.text;
+      }
+    }
+    return response;
   }
 
   /**
@@ -32,13 +116,13 @@ class UnifiedBackend {
       // Tab management
       {
         name: 'browser_tabs',
-        description: 'Manage browser tabs - list, create, select, or close tabs',
+        description: 'STEP 2 (after enable): Manage browser tabs. List available tabs, create a new tab, attach to an existing tab for automation, or close a tab. You must attach to a tab before using other browser_ tools like navigate or interact.',
         inputSchema: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'new', 'select', 'close'],
+              enum: ['list', 'new', 'attach', 'close'],
               description: 'Action to perform'
             },
             url: {
@@ -47,11 +131,11 @@ class UnifiedBackend {
             },
             index: {
               type: 'number',
-              description: 'Tab index (for select action)'
+              description: 'Tab index (for attach action)'
             },
             activate: {
               type: 'boolean',
-              description: 'Bring tab to foreground (default: true for new, false for select)'
+              description: 'Bring tab to foreground (default: true for new, false for attach)'
             },
             stealth: {
               type: 'boolean',
@@ -319,82 +403,136 @@ class UnifiedBackend {
     debugLog(`callTool: ${name}`, args);
 
     try {
+      // Try to auto-reconnect if browser is disconnected
+      const reconnected = await this._autoReconnectIfNeeded();
+      if (!reconnected && this._statefulBackend && this._statefulBackend._browserDisconnected) {
+        // Reconnect failed, return error
+        const errorResponse = {
+          content: [{
+            type: 'text',
+            text: `### Auto-Reconnect Failed\n\nAttempted to reconnect to the browser but failed.\n\n**Please try:**\n1. Check if the extension is running\n2. Call \`disable\` then \`enable\` to reset\n3. Then \`browser_connect\` to reconnect`
+          }],
+          isError: true
+        };
+        return this._addStatusHeader(errorResponse);
+      }
+
+      let result;
+
       // Route to appropriate handler
       switch (name) {
         case 'browser_tabs':
-          return await this._handleBrowserTabs(args);
+          result = await this._handleBrowserTabs(args);
+          break;
 
         case 'browser_navigate':
-          return await this._handleNavigate(args);
+          result = await this._handleNavigate(args);
+          break;
 
         case 'browser_interact':
-          return await this._handleInteract(args);
+          result = await this._handleInteract(args);
+          break;
 
         case 'browser_snapshot':
-          return await this._handleSnapshot();
+          result = await this._handleSnapshot();
+          break;
 
         case 'browser_take_screenshot':
-          return await this._handleScreenshot(args);
+          result = await this._handleScreenshot(args);
+          break;
 
         case 'browser_evaluate':
-          return await this._handleEvaluate(args);
+          result = await this._handleEvaluate(args);
+          break;
 
         case 'browser_console_messages':
-          return await this._handleConsoleMessages();
+          result = await this._handleConsoleMessages();
+          break;
 
         // Forms
         case 'browser_fill_form':
-          return await this._handleFillForm(args);
+          result = await this._handleFillForm(args);
+          break;
 
         // Mouse
         case 'browser_drag':
-          return await this._handleDrag(args);
+          result = await this._handleDrag(args);
+          break;
 
         // Window
         case 'browser_window':
-          return await this._handleWindow(args);
+          result = await this._handleWindow(args);
+          break;
 
         // Verification
         case 'browser_verify_text_visible':
-          return await this._handleVerifyTextVisible(args);
+          result = await this._handleVerifyTextVisible(args);
+          break;
 
         case 'browser_verify_element_visible':
-          return await this._handleVerifyElementVisible(args);
+          result = await this._handleVerifyElementVisible(args);
+          break;
 
         // Network
         case 'browser_network_requests':
-          return await this._handleNetworkRequests();
+          result = await this._handleNetworkRequests();
+          break;
 
         // PDF
         case 'browser_pdf_save':
-          return await this._handlePdfSave(args);
+          result = await this._handlePdfSave(args);
+          break;
 
         // Dialogs
         case 'browser_handle_dialog':
-          return await this._handleDialog(args);
+          result = await this._handleDialog(args);
+          break;
 
         // Extension management
         case 'browser_list_extensions':
-          return await this._handleListExtensions();
+          result = await this._handleListExtensions();
+          break;
 
         case 'browser_reload_extensions':
-          return await this._handleReloadExtensions(args);
+          result = await this._handleReloadExtensions(args);
+          break;
 
         case 'browser_performance_metrics':
-          return await this._handlePerformanceMetrics(args);
+          result = await this._handlePerformanceMetrics(args);
+          break;
 
         default:
           throw new Error(`Tool '${name}' not implemented yet`);
       }
+
+      // Add status header to all browser tool responses
+      return this._addStatusHeader(result);
     } catch (error) {
       debugLog(`Error in ${name}:`, error);
-      return {
+
+      // Detect browser disconnection
+      const errorMsg = error.message || String(error);
+      if (errorMsg.includes('No active connection')) {
+        debugLog('Browser disconnection detected in error handler');
+
+        const errorResponse = {
+          content: [{
+            type: 'text',
+            text: `### Browser Extension Disconnected\n\nThe browser extension has disconnected from the proxy (likely due to extension reload).\n\nCheck the status above - it should now show "⚠️ Browser Disconnected".\n\n**The extension will auto-reconnect** within a few seconds. Once reconnected:\n1. Try your command again\n2. You'll automatically reconnect to the same browser\n3. Then attach to a tab if needed\n\n**Note:** Your proxy connection is still active - no need to call \`disable\` or \`enable\` again!`
+          }],
+          isError: true
+        };
+        return this._addStatusHeader(errorResponse);
+      }
+
+      const errorResponse = {
         content: [{
           type: 'text',
-          text: `### Error\n${error.message || String(error)}`
+          text: `### Error\n${errorMsg}`
         }],
         isError: true
       };
+      return this._addStatusHeader(errorResponse);
     }
   }
 
@@ -458,26 +596,44 @@ class UnifiedBackend {
       const newTab = tabsResult.tabs.find(tab => tab.id === result.tab?.id);
       const tabIndex = newTab ? newTab.index : 'unknown';
 
+      // Store attached tab info for status tracking
+      if (this._statefulBackend) {
+        this._statefulBackend._attachedTab = {
+          index: tabIndex,
+          title: result.tab?.title || newTab?.title,
+          url: args.url || 'about:blank'
+        };
+      }
+
       return {
         content: [{
           type: 'text',
-          text: `### Tab Created and Connected\n\nURL: ${args.url || 'about:blank'}\nTab ID: ${result.tab?.id}\nTab Index: ${tabIndex}\n\n**This tab is now the active connection.** All browser commands will execute on this tab.\n\n**Note:** The tab was inserted at index ${tabIndex} (not necessarily at the end of the list).`
+          text: `### Tab Created and Attached\n\nURL: ${args.url || 'about:blank'}\nTab ID: ${result.tab?.id}\nTab Index: ${tabIndex}\n\n**This tab is now attached.** All browser commands will execute on this tab.\n\n**Note:** The tab was inserted at index ${tabIndex} (not necessarily at the end of the list).`
         }],
         isError: false
       };
     }
 
-    if (action === 'select') {
+    if (action === 'attach') {
       const result = await this._transport.sendCommand('selectTab', {
         tabIndex: args.index,
         activate: args.activate !== false,
         stealth: args.stealth || false
       });
 
+      // Store attached tab info for status tracking
+      if (this._statefulBackend) {
+        this._statefulBackend._attachedTab = {
+          index: args.index,
+          title: result.tab?.title,
+          url: result.tab?.url
+        };
+      }
+
       return {
         content: [{
           type: 'text',
-          text: `### Tab Selected\n\nIndex: ${args.index}\nTitle: ${result.tab?.title}`
+          text: `### ✅ Tab Attached\n\n**Index:** ${args.index}\n**Title:** ${result.tab?.title}\n**URL:** ${result.tab?.url || 'N/A'}`
         }],
         isError: false
       };
@@ -579,6 +735,11 @@ class UnifiedBackend {
     const actions = args.actions || [];
     const onError = args.onError || 'stop';
     const results = [];
+
+    // Get tabs before interactions to detect new tabs
+    const tabsBeforeResult = await this._transport.sendCommand('getTabs', {});
+    const tabsBefore = tabsBeforeResult.tabs || [];
+    const tabIdsBefore = new Set(tabsBefore.map(t => t.id));
 
     for (let i = 0; i < actions.length; i++) {
       const action = actions[i];
@@ -999,10 +1160,26 @@ class UnifiedBackend {
       `${r.index}. ${r.action}: ${r.status === 'success' ? '✓' : '✗'} ${r.message}`
     ).join('\n');
 
+    // Detect new tabs opened during interactions
+    const tabsAfterResult = await this._transport.sendCommand('getTabs', {});
+    const tabsAfter = tabsAfterResult.tabs || [];
+    const newTabs = tabsAfter.filter(t => !tabIdsBefore.has(t.id));
+
+    let newTabsInfo = '';
+    if (newTabs.length > 0) {
+      newTabsInfo = '\n\n### 🆕 New Tabs Opened\n\n';
+      newTabs.forEach(tab => {
+        const title = tab.title || 'Untitled';
+        const url = tab.url || 'N/A';
+        newTabsInfo += `**Tab ${tab.index}:** ${title}\n`;
+        newTabsInfo += `**URL:** ${url}\n\n`;
+      });
+    }
+
     return {
       content: [{
         type: 'text',
-        text: `### Interactions Complete\n\nTotal: ${results.length}\nSucceeded: ${successCount}\nFailed: ${errorCount}\n\n${summary}`
+        text: `### Interactions Complete\n\nTotal: ${results.length}\nSucceeded: ${successCount}\nFailed: ${errorCount}\n\n${summary}${newTabsInfo}`
       }],
       isError: errorCount > 0
     };
