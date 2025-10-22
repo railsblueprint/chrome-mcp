@@ -2453,7 +2453,7 @@ ${clsEmoji} Cumulative Layout Shift (CLS): ${timing.cls?.toFixed(3) || 'N/A'}
   async _handleExtractContent(args) {
     const mode = args.mode || 'auto';
     const selector = args.selector;
-    const maxLines = args.max_lines || 500;
+    const maxLines = args.max_lines || 250;
     const offset = args.offset || 0;
 
     debugLog(`Extracting content in ${mode} mode${selector ? ` with selector: ${selector}` : ''}, max_lines: ${maxLines}, offset: ${offset}`);

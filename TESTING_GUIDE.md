@@ -1385,7 +1385,7 @@ Use this checklist to verify all tools have been tested:
 - Returns clean markdown format
 - Shows detected element (e.g., "main.mw-body")
 - Includes total line count
-- Content limited to 500 lines by default
+- Content limited to 250 lines by default
 
 **What to Verify:**
 - Main content extracted, navigation/sidebars excluded

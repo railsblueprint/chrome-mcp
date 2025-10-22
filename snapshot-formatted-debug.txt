@@ -1,0 +1,67 @@
+### Page Snapshot
+
+RootWebArea
+  none
+    main
+      none
+        link:  Blueprint MCP for Chrome
+          LineBreak: 
+
+          heading: Blueprint MCP for Chrome
+            StaticText: Blueprint MCP for Chrome
+        none
+          heading: Войти в вашу учётную запись
+            StaticText: Войти в вашу учётную запись
+          generic
+            none
+              LabelText
+                StaticText: Адрес электронной почты
+              textbox: Адрес электронной почты [input[placeholder="Адрес электронной почты"]]
+                value: "test@example.com"
+                StaticText: test@example.com
+            none
+              LabelText
+                StaticText: Пароль
+              textbox: Пароль [input[placeholder="Пароль"]]
+                value: "•••••••••••••"
+                StaticText: •••••••••••••
+            generic
+              checkbox: Запомнить меня
+              LabelText
+                StaticText: Запомнить меня
+            button: Войти
+              StaticText: Войти
+          none
+            none
+              none
+                separator
+                StaticText: Или войти через
+                separator
+              none
+                button: 
+                  StaticText: 
+                button: 
+                  StaticText: 
+                button: 
+                  StaticText: 
+            generic
+              link: Зарегистрироваться
+                StaticText: Зарегистрироваться
+              LineBreak: 
+
+              link: Забыли пароль?
+                StaticText: Забыли пароль?
+              LineBreak: 
+
+              link: Не получили инструкции по подтверждению?
+                StaticText: Не получили инструкции по подтверждению?
+              LineBreak: 
+
+              link: Не получили инструкции по разблокировке?
+                StaticText: Не получили инструкции по разблокировке?
+              LineBreak: 
+
+    generic
+      StaticText: Создано с помощью
+      link:  Rails Blueprint
+        StaticText:  Rails Blueprint
