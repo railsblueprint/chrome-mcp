@@ -71,6 +71,9 @@ export class RelayConnection {
   private _consoleMessages: Array<{ type: string; text: string; timestamp: number; url?: string; lineNumber?: number }> = [];
   private _networkRequests: Array<{ requestId: string; url: string; method: string; timestamp: number; statusCode?: number; statusText?: string; type?: string }> = [];
   private _requestsMap: Map<string, any> = new Map(); // requestId → request details
+  private _executionContexts: Map<number, any> = new Map(); // contextId → context info
+  private _mainContextId: number | null = null; // Main page execution context
+  private _extensionContexts: Map<string, Set<number>> = new Map(); // extensionId → Set of contextIds
 
   onclose?: () => void;
   onStealthModeSet?: (stealth: boolean) => void;
@@ -131,7 +134,30 @@ export class RelayConnection {
       // Enable Network domain for network request tracking
       await chrome.debugger.sendCommand(this._debuggee, 'Network.enable');
 
-      debugLog('Console and Network domains enabled for tracking');
+      // Enable Page domain for navigation detection (to clear tracking on navigation)
+      await chrome.debugger.sendCommand(this._debuggee, 'Page.enable');
+
+      debugLog('Console, Network, and Page domains enabled for tracking');
+
+      // Query existing execution contexts to find main page context
+      // This is needed because contexts created before Runtime.enable won't trigger events
+      try {
+        const result: any = await chrome.debugger.sendCommand(this._debuggee, 'Runtime.evaluate', {
+          expression: '1', // Dummy expression to trigger context detection
+          returnByValue: true
+        });
+
+        if (result.executionContextId) {
+          debugLog(`Current execution context from evaluate: ${result.executionContextId}`);
+          // This will be updated by events if there are multiple contexts
+          if (this._mainContextId === null) {
+            this._mainContextId = result.executionContextId;
+            debugLog(`Initial main context set to: ${this._mainContextId}`);
+          }
+        }
+      } catch (error) {
+        debugLog('Failed to get initial context, will rely on events:', error);
+      }
     } catch (error) {
       console.error('[Extension] Failed to enable tracking domains:', error);
     }
@@ -164,6 +190,72 @@ export class RelayConnection {
   private _onDebuggerEvent(source: chrome.debugger.DebuggerSession, method: string, params: any): void {
     if (source.tabId !== this._debuggee.tabId)
       return;
+
+    // Log navigation events to understand detach timing
+    if (method.startsWith('Page.frame')) {
+      debugLog(`CDP Navigation Event: ${method}, frameId: ${params.frame?.id}, parentId: ${params.frame?.parentId}, url: ${params.frame?.url || params.url || 'unknown'}`);
+    }
+
+    // Clear tracking on navigation (main frame only)
+    if (method === 'Page.frameNavigated') {
+      // Only clear on main frame navigation, not iframes
+      if (!params.frame?.parentId) {
+        debugLog('Main frame navigated, clearing console and network tracking');
+        this.clearTracking();
+      }
+    }
+
+    // Track execution contexts (to avoid extension iframes)
+    if (method === 'Runtime.executionContextCreated') {
+      const context = params.context;
+      this._executionContexts.set(context.id, context);
+
+      debugLog(`Context created: id=${context.id}, origin=${context.origin}, name=${context.name}, isDefault=${context.auxData?.isDefault}, frameId=${context.auxData?.frameId}`);
+
+      // Track chrome-extension:// contexts for debugging
+      if (context.origin?.startsWith('chrome-extension://')) {
+        const extensionId = context.origin.replace('chrome-extension://', '').split('/')[0];
+        if (!this._extensionContexts.has(extensionId)) {
+          this._extensionContexts.set(extensionId, new Set());
+        }
+        this._extensionContexts.get(extensionId)!.add(context.id);
+        debugLog(`Tracking chrome-extension context: ${context.id}, extensionId: ${extensionId}`);
+        return;
+      }
+
+      // Main page context: first non-extension context without a parent frame
+      // or the default context (auxData.isDefault=true)
+      if (this._mainContextId === null || !context.auxData?.frameId || context.auxData?.isDefault) {
+        this._mainContextId = context.id;
+        debugLog(`Main page context set: ${context.id} (origin: ${context.origin})`);
+      }
+    }
+
+    if (method === 'Runtime.executionContextDestroyed') {
+      const contextId = params.executionContextId;
+      this._executionContexts.delete(contextId);
+
+      // Remove from extension contexts tracking
+      for (const [extensionId, contextIds] of this._extensionContexts.entries()) {
+        contextIds.delete(contextId);
+        if (contextIds.size === 0) {
+          this._extensionContexts.delete(extensionId);
+        }
+      }
+
+      if (this._mainContextId === contextId) {
+        this._mainContextId = null;
+        debugLog('Main context destroyed, will reset on next context creation');
+      }
+    }
+
+    if (method === 'Runtime.executionContextsCleared') {
+      this._executionContexts.clear();
+      this._extensionContexts.clear();
+      // Don't clear mainContextId - keep it as fallback until we get a new one
+      // This is important for reattach scenarios where we can't get new contexts
+      debugLog('All execution contexts cleared (keeping mainContextId as fallback)');
+    }
 
     // Capture console messages (unless in stealth mode)
     if (method === 'Runtime.consoleAPICalled' && !this._stealthMode) {
@@ -218,32 +310,107 @@ export class RelayConnection {
       }
     }
 
-    // Stealth mode: Filter out console-related CDP events from being forwarded
-    if (this._stealthMode && (
-      method.startsWith('Runtime.consoleAPICalled') ||
-      method.startsWith('Runtime.exceptionThrown') ||
-      method.startsWith('Console.')
-    )) {
-      debugLog('Stealth mode: Blocking console event:', method);
+    // CDP events are captured locally only, not forwarded automatically
+    // They will be sent when explicitly requested via getConsoleLogs or getNetworkRequests
+    debugLog('CDP event captured locally:', method);
+  }
+
+  private async _onDebuggerDetach(source: chrome.debugger.Debuggee, reason: string): Promise<void> {
+    if (source.tabId !== this._debuggee.tabId)
+      return;
+
+    const tabId = source.tabId;
+    if (!tabId) {
+      this.close(`Debugger detached: ${reason}`);
+      this._debuggee = { };
       return;
     }
 
-    debugLog('Forwarding CDP event:', method, params);
-    const sessionId = source.sessionId;
-    this._sendMessage({
-      jsonrpc: '2.0',
-      method: 'forwardCDPEvent',
-      params: {
-        sessionId,
-        method,
-        params,
-      },
-    });
-  }
+    console.error(`[Extension] Debugger detached from tab ${tabId}, reason: ${reason}`);
 
-  private _onDebuggerDetach(source: chrome.debugger.Debuggee, reason: string): void {
-    if (source.tabId !== this._debuggee.tabId)
-      return;
+    // Check if tab still exists before closing connection
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab) {
+        console.error(`[Extension] Tab ${tabId} still exists (URL: ${tab.url}), attempting to reattach debugger...`);
+
+        // Check if tab URL is automatable before reattaching
+        const isAutomatable = tab.url && !['chrome:', 'edge:', 'devtools:', 'chrome-extension:'].some(scheme => tab.url!.startsWith(scheme));
+        if (!isAutomatable) {
+          console.error(`[Extension] Tab ${tabId} has non-automatable URL (${tab.url}), cannot reattach`);
+          this.close(`Debugger detached: tab navigated to non-automatable URL: ${tab.url}`);
+          this._debuggee = { };
+          return;
+        }
+
+        // Try to reattach debugger
+        try {
+          await chrome.debugger.attach({ tabId }, '1.3');
+
+          // Try to enable tracking domains, but don't fail if they can't be enabled
+          // Chrome extensions (like iCloud Password Manager) inject iframes that block CDP tracking
+          // Tracking is optional - automation still works without it
+          let domainsEnabled = false;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+            try {
+              await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable');
+              await chrome.debugger.sendCommand({ tabId }, 'Log.enable');
+              await chrome.debugger.sendCommand({ tabId }, 'Network.enable');
+              await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
+              domainsEnabled = true;
+              console.error(`[Extension] Tracking domains enabled after ${attempt + 1} attempts`);
+              break;
+            } catch (domainError) {
+              // Ignore - tracking is optional
+            }
+          }
+
+          if (!domainsEnabled) {
+            console.error(`[Extension] Could not enable tracking domains (likely due to extension iframes), continuing without console/network tracking`);
+          }
+
+          // Get a valid execution context even if domains failed to enable
+          // This is critical for Runtime.evaluate to work
+          // Wait longer for extension iframes to settle
+          if (this._mainContextId === null) {
+            for (let attempt = 0; attempt < 10; attempt++) {
+              await new Promise(resolve => setTimeout(resolve, 300));
+              try {
+                // Force enable Runtime domain just to get context
+                await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable');
+                // Do a simple evaluate to get the current context ID
+                const result: any = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+                  expression: '1',
+                  returnByValue: true
+                });
+                if (result.executionContextId) {
+                  this._mainContextId = result.executionContextId;
+                  console.error(`[Extension] Got execution context ${this._mainContextId} from evaluate after ${attempt + 1} attempts`);
+                  break;
+                }
+              } catch (error) {
+                console.error(`[Extension] Attempt ${attempt + 1}/10 to get execution context failed:`, error);
+              }
+            }
+
+            if (this._mainContextId === null) {
+              console.error('[Extension] Failed to get execution context after 10 attempts, automation may not work');
+            }
+          }
+
+          console.error(`[Extension] Successfully reattached debugger to tab ${tabId}`);
+          return; // Don't close the connection even if tracking failed
+        } catch (reattachError: any) {
+          console.error(`[Extension] Failed to reattach debugger:`, reattachError);
+          // Fall through to close connection
+        }
+      }
+    } catch (error) {
+      // Tab doesn't exist, proceed with closing
+      console.error(`[Extension] Tab ${tabId} no longer exists`);
+    }
+
     this.close(`Debugger detached: ${reason}`);
     this._debuggee = { };
   }
@@ -554,17 +721,89 @@ export class RelayConnection {
     if (message.method === 'forwardCDPCommand') {
       const { sessionId, method, params } = message.params;
       debugLog('CDP command:', method, params);
+
+      // Inject main context ID into Runtime.evaluate to avoid extension iframes
+      let modifiedParams = params;
+      if (method === 'Runtime.evaluate' && !params.contextId && this._mainContextId !== null) {
+        modifiedParams = { ...params, contextId: this._mainContextId };
+        debugLog(`Injecting tracked context ID ${this._mainContextId} into Runtime.evaluate`);
+      } else {
+        debugLog(`Runtime.evaluate without contextId (mainContextId=${this._mainContextId})`);
+      }
+
       const debuggerSession: chrome.debugger.DebuggerSession = {
         ...this._debuggee,
         sessionId,
       };
-      // Forward CDP command to chrome.debugger
-      return await chrome.debugger.sendCommand(
-          debuggerSession,
-          method,
-          params
-      );
+
+      // Forward CDP command to chrome.debugger with enhanced error handling
+      try {
+        return await chrome.debugger.sendCommand(
+            debuggerSession,
+            method,
+            modifiedParams
+        );
+      } catch (error: any) {
+        // Detect extension blocking errors
+        if (error.message && error.message.includes('chrome-extension://')) {
+          const extensionInfo = await this._getBlockingExtensionsInfo();
+          throw new Error(
+            `Browser extension blocking debugging: ${extensionInfo}\n\n` +
+            `This page has extensions that inject iframes, preventing automation. ` +
+            `Please disable the blocking extension(s) and try again.\n\n` +
+            `Original error: ${error.message}`
+          );
+        }
+        throw error;
+      }
     }
+  }
+
+  private async _getBlockingExtensionsInfo(): Promise<string> {
+    const extensionInfos: string[] = [];
+
+    // First, check if we have tracked extension contexts
+    if (this._extensionContexts.size > 0) {
+      for (const extensionId of this._extensionContexts.keys()) {
+        try {
+          const extInfo = await chrome.management.get(extensionId);
+          extensionInfos.push(`"${extInfo.name}" (ID: ${extensionId})`);
+        } catch {
+          // If we can't get extension info, just show the ID
+          extensionInfos.push(`Extension ID: ${extensionId}`);
+        }
+      }
+      return extensionInfos.join(', ');
+    }
+
+    // If no contexts tracked yet, list all enabled extensions that commonly inject iframes
+    // This includes password managers and similar tools
+    try {
+      const allExtensions = await chrome.management.getAll();
+      const ourExtensionId = chrome.runtime.id;
+
+      // Known problematic extension types (password managers, etc.)
+      const suspiciousKeywords = [
+        'password', 'icloud', 'lastpass', '1password', 'bitwarden',
+        'dashlane', 'keeper', 'roboform', 'enpass'
+      ];
+
+      const likelyBlockers = allExtensions.filter(ext => {
+        if (!ext.enabled || ext.id === ourExtensionId) return false;
+        const name = ext.name.toLowerCase();
+        return suspiciousKeywords.some(keyword => name.includes(keyword));
+      });
+
+      if (likelyBlockers.length > 0) {
+        return likelyBlockers
+          .map(ext => `"${ext.name}" (ID: ${ext.id})`)
+          .join(', ') + ' (likely culprit based on extension type)';
+      }
+    } catch {
+      // Ignore errors when listing extensions
+    }
+
+    return 'Unknown extension - check for password managers or similar extensions that inject iframes into pages';
   }
 
   private async _listExtensions(): Promise<any> {
@@ -699,9 +938,22 @@ export class RelayConnection {
     const focusedWindow = await chrome.windows.getLastFocused();
     const focusedWindowId = focusedWindow.id;
 
+    // Get our own extension ID to help filter internal tabs
+    const ourExtensionId = chrome.runtime.id;
+
     return {
       tabs: allTabs.map((tab, index) => {
-        const isAutomatable = tab.url && !['chrome:', 'edge:', 'devtools:'].some(scheme => tab.url!.startsWith(scheme));
+        const isAutomatable = tab.url && !['chrome:', 'edge:', 'devtools:', 'chrome-extension:'].some(scheme => tab.url!.startsWith(scheme));
+
+        // Extract extension ID from chrome-extension:// URLs
+        let extensionId = undefined;
+        if (tab.url?.startsWith('chrome-extension://')) {
+          const match = tab.url.match(/^chrome-extension:\/\/([^\/]+)/);
+          if (match) {
+            extensionId = match[1];
+          }
+        }
+
         return {
           id: tab.id,
           title: tab.title,
@@ -711,10 +963,12 @@ export class RelayConnection {
           index: index, // Use array index for consistency
           windowFocused: tab.windowId === focusedWindowId,
           automatable: isAutomatable,
+          extensionId: extensionId, // Include extension ID for chrome-extension:// tabs
         };
       }),
       count: allTabs.length,
       focusedWindowId,
+      ourExtensionId, // Include our extension ID so backend can filter our tabs
     };
   }
 
@@ -730,10 +984,12 @@ export class RelayConnection {
       throw new Error('Invalid tab ID');
     }
 
-    // Check if tab is automatable (not chrome://, edge://, devtools://)
-    const isAutomatable = selectedTab.url && !['chrome:', 'edge:', 'devtools:'].some(scheme => selectedTab.url!.startsWith(scheme));
+    debugLog(`_selectTab: index=${tabIndex}, id=${selectedTab.id}, url=${selectedTab.url}, title=${selectedTab.title}`);
+
+    // Check if tab is automatable (not chrome://, edge://, devtools://, chrome-extension://)
+    const isAutomatable = selectedTab.url && !['chrome:', 'edge:', 'devtools:', 'chrome-extension:'].some(scheme => selectedTab.url!.startsWith(scheme));
     if (!isAutomatable) {
-      throw new Error(`Cannot automate tab ${tabIndex}: "${selectedTab.title}" (${selectedTab.url || 'no url'}) - chrome://, edge://, and devtools:// pages cannot be automated`);
+      throw new Error(`Cannot automate tab ${tabIndex}: "${selectedTab.title}" (${selectedTab.url || 'no url'}) - chrome://, edge://, devtools://, and chrome-extension:// pages cannot be automated`);
     }
 
     // Optionally switch to the tab (default: false - attach in background)
@@ -766,9 +1022,23 @@ export class RelayConnection {
 
     // Attach debugger immediately (no lazy attachment)
     debugLog('Attaching debugger to tab:', this._debuggee);
-    await chrome.debugger.attach(this._debuggee, '1.3');
-    await this._enableDomainsForTracking();
-    debugLog('Debugger attached successfully');
+    try {
+      await chrome.debugger.attach(this._debuggee, '1.3');
+      await this._enableDomainsForTracking();
+      debugLog('Debugger attached successfully');
+    } catch (error: any) {
+      // Detect extension blocking errors
+      if (error.message && error.message.includes('chrome-extension://')) {
+        const extensionInfo = await this._getBlockingExtensionsInfo();
+        throw new Error(
+          `Browser extension blocking debugging: ${extensionInfo}\n\n` +
+          `This page has extensions that inject iframes, preventing automation. ` +
+          `Please disable the blocking extension(s) and try again.\n\n` +
+          `Original error: ${error.message}`
+        );
+      }
+      throw error;
+    }
 
     return {
       success: true,
@@ -815,12 +1085,49 @@ export class RelayConnection {
       this.onStealthModeSet(stealth);
     }
 
-    // Wait for tab to be ready, then attach debugger immediately
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Wait for tab to have a URL before attaching debugger
+    // Tabs created with chrome.tabs.create start with empty URL
+    let tabInfo = await chrome.tabs.get(newTab.id);
+    let attempts = 0;
+    while (!tabInfo.url && attempts < 50) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      tabInfo = await chrome.tabs.get(newTab.id);
+      attempts++;
+    }
+
+    debugLog(`Tab ${newTab.id} URL before attach: ${tabInfo.url}, status: ${tabInfo.status}`);
+
+    // Check if tab URL is automatable
+    if (tabInfo.url) {
+      const isAutomatable = !['chrome:', 'edge:', 'devtools:', 'chrome-extension:', 'about:'].some(scheme => tabInfo.url!.startsWith(scheme));
+      if (!isAutomatable) {
+        throw new Error(`Cannot automate tab with URL: ${tabInfo.url}`);
+      }
+    }
+
     debugLog('Attaching debugger to new tab:', this._debuggee);
-    await chrome.debugger.attach(this._debuggee, '1.3');
-    await this._enableDomainsForTracking();
-    debugLog('Debugger attached successfully');
+    try {
+      await chrome.debugger.attach(this._debuggee, '1.3');
+      await this._enableDomainsForTracking();
+      debugLog('Debugger attached successfully');
+
+      // Wait for page and extension iframes to fully load before returning
+      // This prevents issues with other extensions (like iCloud Password Manager) that inject iframes
+      debugLog('Waiting for page to stabilize...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    } catch (error: any) {
+      // Detect extension blocking errors
+      if (error.message && error.message.includes('chrome-extension://')) {
+        const extensionInfo = await this._getBlockingExtensionsInfo();
+        throw new Error(
+          `Browser extension blocking debugging: ${extensionInfo}\n\n` +
+          `This page has extensions that inject iframes, preventing automation. ` +
+          `Please disable the blocking extension(s) and try again.\n\n` +
+          `Original error: ${error.message}`
+        );
+      }
+      throw error;
+    }
 
     return {
       success: true,

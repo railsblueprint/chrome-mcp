@@ -140,13 +140,14 @@ class UnifiedBackend {
       // Screenshot
       {
         name: 'browser_take_screenshot',
-        description: 'Capture screenshot of the page (default: JPEG quality 80, viewport only)',
+        description: 'Capture screenshot of the page (default: JPEG quality 80, viewport only). Returns image data if no path provided, saves to file if path is specified.',
         inputSchema: {
           type: 'object',
           properties: {
             type: { type: 'string', enum: ['png', 'jpeg'], description: 'Image format (default: jpeg)' },
             fullPage: { type: 'boolean', description: 'Capture full page (default: false, viewport only)' },
-            quality: { type: 'number', description: 'JPEG quality 0-100 (default: 80)' }
+            quality: { type: 'number', description: 'JPEG quality 0-100 (default: 80)' },
+            path: { type: 'string', description: 'Optional: file path to save screenshot. If provided, saves to disk instead of returning image data.' }
           }
         }
       },
@@ -260,11 +261,11 @@ class UnifiedBackend {
       // PDF
       {
         name: 'browser_pdf_save',
-        description: 'Save page as PDF',
+        description: 'Save page as PDF. Saves to specified file path.',
         inputSchema: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: 'Output file path' }
+            path: { type: 'string', description: 'File path to save PDF (e.g., "/path/to/output.pdf")' }
           }
         }
       },
@@ -406,21 +407,40 @@ class UnifiedBackend {
       const result = await this._transport.sendCommand('getTabs', {});
       const tabs = result.tabs || [];
 
-      // Format each tab with all metadata
-      const tabList = tabs.map((tab, i) => {
-        const markers = [];
-        if (tab.active) markers.push('ACTIVE');
-        if (tab.windowFocused) markers.push('FOCUSED WINDOW');
-        if (!tab.automatable) markers.push('NOT AUTOMATABLE');
+      // Group tabs by window
+      const tabsByWindow = {};
+      tabs.forEach((tab) => {
+        // tab.index is already set correctly by extension (chrome.tabs.query order)
+        if (!tabsByWindow[tab.windowId]) {
+          tabsByWindow[tab.windowId] = [];
+        }
+        tabsByWindow[tab.windowId].push(tab);
+      });
 
-        const markerStr = markers.length > 0 ? ` [${markers.join(', ')}]` : '';
-        return `${i}. ${tab.title || 'Untitled'} (${tab.url || 'about:blank'})${markerStr}`;
+      // Format tabs grouped by window
+      const windowIds = Object.keys(tabsByWindow).sort();
+      const tabList = windowIds.map(windowId => {
+        const windowTabs = tabsByWindow[windowId];
+        const windowHeader = windowId == result.focusedWindowId ?
+          `\n**Window ${windowId} (FOCUSED):**\n` :
+          `\n**Window ${windowId}:**\n`;
+
+        const tabLines = windowTabs.map(tab => {
+          const markers = [];
+          if (tab.active) markers.push('ACTIVE');
+          if (!tab.automatable) markers.push('NOT AUTOMATABLE');
+
+          const markerStr = markers.length > 0 ? ` [${markers.join(', ')}]` : '';
+          return `  ${tab.index}. ${tab.title || 'Untitled'} (${tab.url || 'about:blank'})${markerStr}`;
+        }).join('\n');
+
+        return windowHeader + tabLines;
       }).join('\n');
 
       return {
         content: [{
           type: 'text',
-          text: `### Browser Tabs\n\nTotal: ${tabs.length}\nFocused Window: ${result.focusedWindowId}\n\n${tabList}`
+          text: `### Browser Tabs\n\nTotal: ${tabs.length} tabs in ${windowIds.length} window(s)\n${tabList}`
         }],
         isError: false
       };
@@ -433,10 +453,15 @@ class UnifiedBackend {
         stealth: args.stealth || false
       });
 
+      // Get updated tab list to find the actual index of the new tab
+      const tabsResult = await this._transport.sendCommand('getTabs', {});
+      const newTab = tabsResult.tabs.find(tab => tab.id === result.tab?.id);
+      const tabIndex = newTab ? newTab.index : 'unknown';
+
       return {
         content: [{
           type: 'text',
-          text: `### Tab Created\n\nURL: ${args.url || 'about:blank'}\nTab ID: ${result.tab?.id}`
+          text: `### Tab Created and Connected\n\nURL: ${args.url || 'about:blank'}\nTab ID: ${result.tab?.id}\nTab Index: ${tabIndex}\n\n**This tab is now the active connection.** All browser commands will execute on this tab.\n\n**Note:** The tab was inserted at index ${tabIndex} (not necessarily at the end of the list).`
         }],
         isError: false
       };
@@ -1408,6 +1433,23 @@ class UnifiedBackend {
     const format = args.type || 'jpeg';  // Default to JPEG for smaller file size
     const quality = args.quality !== undefined ? args.quality : 80;  // Default quality 80
 
+    // For full-page screenshots, scroll to top first to ensure sticky elements are positioned correctly
+    if (args.fullPage) {
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: `
+            window.scrollTo(0, 0);
+            // Force layout reflow to trigger sticky element repositioning
+            document.body.offsetHeight;
+            // Wait for CSS animations/transitions to complete
+            new Promise(resolve => setTimeout(resolve, 500));
+          `,
+          awaitPromise: true
+        }
+      });
+    }
+
     const result = await this._transport.sendCommand('forwardCDPCommand', {
       method: 'Page.captureScreenshot',
       params: {
@@ -1417,7 +1459,22 @@ class UnifiedBackend {
       }
     });
 
-    // Return base64 image
+    // If path is provided, save the screenshot to disk
+    if (args.path && result.data) {
+      const fs = require('fs');
+      const buffer = Buffer.from(result.data, 'base64');
+      fs.writeFileSync(args.path, buffer);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Screenshot Saved\n\nFile: ${args.path}\nFormat: ${format.toUpperCase()}\nSize: ${buffer.length} bytes (${(buffer.length / 1024).toFixed(2)} KB)${args.fullPage ? '\nType: Full page' : '\nType: Viewport only'}`
+        }],
+        isError: false
+      };
+    }
+
+    // Return base64 image if no path provided
     return {
       content: [{
         type: 'image',
@@ -1854,10 +1911,26 @@ class UnifiedBackend {
       params: {}
     });
 
+    // If path is provided, save the PDF to disk
+    if (args.path && result.data) {
+      const fs = require('fs');
+      const buffer = Buffer.from(result.data, 'base64');
+      fs.writeFileSync(args.path, buffer);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### PDF Saved\n\nFile: ${args.path}\nSize: ${buffer.length} bytes (${(buffer.length / 1024).toFixed(2)} KB)`
+        }],
+        isError: false
+      };
+    }
+
+    // If no path provided, return base64 data
     return {
       content: [{
         type: 'text',
-        text: `### PDF Generated\n\nBase64 data length: ${result.data?.length || 0} bytes\n\n(Save to file: ${args.path})`
+        text: `### PDF Generated\n\nBase64 data length: ${result.data?.length || 0} bytes\n\nProvide a 'path' parameter to save to disk.`
       }],
       isError: false
     };
