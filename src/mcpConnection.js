@@ -29,18 +29,25 @@ class MCPConnection {
     this.mode = config.mode; // 'direct' or 'proxy'
     this.url = config.url;
     this.accessToken = config.accessToken; // Only for proxy mode
+    this.clientId = config.clientId; // Human-readable client identifier
+    this.selectedBrowserId = config.selectedBrowserId; // For proxy mode - specific browser to connect to
     this._ws = null;
     this._connected = false;
     this._authenticated = false; // For proxy mode
     this._connectionId = null; // For proxy mode - connection to specific extension
     this._pendingRequests = new Map(); // requestId -> { resolve, reject, timeoutId }
     this.onClose = null; // Callback when connection closes
+    this.onBrowserDisconnected = null; // Callback when browser extension disconnects (proxy stays connected)
   }
 
   /**
    * Connect and initialize
+   * @param {Object} options - Connection options
+   * @param {boolean} options.listOnly - If true, only authenticate and list extensions, don't connect to one
    */
-  async connect() {
+  async connect(options = {}) {
+    const { listOnly = false } = options;
+
     debugLog('Connecting in', this.mode, 'mode to:', this.url);
 
     await this._connectWebSocket(this.url);
@@ -48,9 +55,23 @@ class MCPConnection {
     if (this.mode === 'proxy') {
       // Authenticate with proxy
       debugLog('Authenticating with proxy...');
-      await this.sendRequest('mcp_handshake', { access_token: this.accessToken });
+      const handshakeParams = { access_token: this.accessToken };
+
+      // Include client_id if provided
+      if (this.clientId) {
+        handshakeParams.client_id = this.clientId;
+        debugLog('Including client_id in handshake:', this.clientId);
+      }
+
+      await this.sendRequest('mcp_handshake', handshakeParams);
       this._authenticated = true;
       debugLog('Authenticated successfully');
+
+      // If listOnly mode, stop here (used for listing browsers)
+      if (listOnly) {
+        debugLog('List-only mode, skipping extension connection');
+        return;
+      }
 
       // List available extensions
       debugLog('Listing extensions...');
@@ -61,13 +82,29 @@ class MCPConnection {
         throw new Error('No browser extensions are connected to the proxy.');
       }
 
-      // Auto-connect to the first extension
-      const firstExtension = extensionsResult.extensions[0];
-      debugLog('Connecting to extension:', firstExtension.id);
+      // Determine which extension to connect to
+      let targetExtension;
+      if (this.selectedBrowserId) {
+        // User selected a specific browser
+        debugLog('Looking for selected browser:', this.selectedBrowserId);
+        targetExtension = extensionsResult.extensions.find(ext => ext.id === this.selectedBrowserId);
 
-      const connectResult = await this.sendRequest('connect', { extension_id: firstExtension.id });
+        if (!targetExtension) {
+          throw new Error(`Selected browser '${this.selectedBrowserId}' is not available. It may have disconnected. Please list browsers again.`);
+        }
+
+        debugLog('Found selected browser:', targetExtension.name);
+      } else {
+        // Auto-connect to the first extension
+        targetExtension = extensionsResult.extensions[0];
+        debugLog('Auto-selecting first extension:', targetExtension.name);
+      }
+
+      // Connect to the target extension
+      debugLog('Connecting to extension:', targetExtension.id);
+      const connectResult = await this.sendRequest('connect', { extension_id: targetExtension.id });
       this._connectionId = connectResult.connection_id;
-      debugLog('Connected to extension:', firstExtension.name, 'connectionId:', this._connectionId);
+      debugLog('Connected to extension:', targetExtension.name, 'connectionId:', this._connectionId);
     }
 
     debugLog('Connection ready for tool calls');
@@ -138,7 +175,14 @@ class MCPConnection {
       // Handle JSON-RPC notifications (has method, no id)
       if (message.method && message.id === undefined) {
         debugLog('Received notification:', message.method, message.params);
-        // Just log notifications, don't respond
+
+        // Handle disconnection notification from proxy
+        if (message.method === 'disconnected' && this.onBrowserDisconnected) {
+          debugLog('Extension disconnected notification received');
+          // Notify the StatefulBackend without closing the proxy connection
+          this.onBrowserDisconnected(message.params);
+        }
+
         return;
       }
 
