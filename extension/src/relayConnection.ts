@@ -792,14 +792,10 @@ export class RelayConnection {
       const { sessionId, method, params } = message.params;
       debugLog('CDP command:', method, params);
 
-      // Inject main context ID into Runtime.evaluate to avoid extension iframes
+      // Don't inject contextId - let CDP use default page context
+      // The mainContextId tracking was causing issues with context becoming invalid
+      // CDP should default to the main page context automatically
       let modifiedParams = params;
-      if (method === 'Runtime.evaluate' && !params.contextId && this._mainContextId !== null) {
-        modifiedParams = { ...params, contextId: this._mainContextId };
-        debugLog(`Injecting tracked context ID ${this._mainContextId} into Runtime.evaluate`);
-      } else {
-        debugLog(`Runtime.evaluate without contextId (mainContextId=${this._mainContextId})`);
-      }
 
       const debuggerSession: chrome.debugger.DebuggerSession = {
         ...this._debuggee,
