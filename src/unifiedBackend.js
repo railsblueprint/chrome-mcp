@@ -1487,70 +1487,70 @@ class UnifiedBackend {
   }
 
   async _handleSnapshot() {
-    // Get accessibility tree snapshot
+    // Get formatted accessibility tree snapshot from extension
+    // Extension now does the heavy processing (grouping, collapsing, truncating)
+    // and sends us a structured, compact JSON (~100KB instead of ~12MB)
     const result = await this._transport.sendCommand('forwardCDPCommand', {
       method: 'Accessibility.getFullAXTree',
       params: {}
     });
 
-    // DEBUG: Save raw unfiltered response to file
-    const fs = require('fs');
-    const path = require('path');
-    const debugFile = path.join(process.cwd(), 'snapshot-raw-debug.json');
-    try {
-      fs.writeFileSync(debugFile, JSON.stringify(result, null, 2));
-      console.log(`[DEBUG] Saved raw snapshot to ${debugFile}`);
-    } catch (error) {
-      console.error('[DEBUG] Failed to save raw snapshot:', error);
+    // Extension returns { formattedSnapshot: { nodes, totalLines, truncated } }
+    if (!result.formattedSnapshot) {
+      return {
+        content: [{
+          type: 'text',
+          text: '### Page Snapshot\n\nError: No formatted snapshot received from extension'
+        }],
+        isError: true
+      };
     }
 
-    // Build tree from flat array
-    const nodes = result.nodes || [];
-    const nodeMap = new Map();
+    const formatted = result.formattedSnapshot;
+    debugLog(`Received formatted snapshot: ${formatted.totalLines} lines, truncated: ${formatted.truncated}`);
 
-    // First pass: index all nodes by ID
-    for (const node of nodes) {
-      nodeMap.set(node.nodeId, { ...node, children: [] });
-    }
-
-    // Second pass: build parent-child relationships
-    let rootNode = null;
-    for (const node of nodeMap.values()) {
-      if (node.parentId) {
-        const parent = nodeMap.get(node.parentId);
-        if (parent) {
-          parent.children.push(node);
-        }
-      } else {
-        rootNode = node; // This is the root (no parent)
-      }
-    }
-
-    // Clean, collapse, and clean again
-    if (rootNode) {
-      this._cleanTree(rootNode);   // First pass: remove InlineTextBox, empty elements
-      this._collapseTree(rootNode); // Collapse useless wrappers
-      this._cleanTree(rootNode);   // Second pass: remove buttons that now have only images
-    }
-
-    // Format snapshot as text
-    const snapshot = rootNode ? this._formatAXTree([rootNode]) : 'No root node found';
-
-    // DEBUG: Save formatted snapshot to file
-    try {
-      fs.writeFileSync(path.join(process.cwd(), 'snapshot-formatted-debug.txt'), `### Page Snapshot\n\n${snapshot}`);
-      console.log(`[DEBUG] Saved formatted snapshot to snapshot-formatted-debug.txt`);
-    } catch (error) {
-      console.error('[DEBUG] Failed to save formatted snapshot:', error);
-    }
+    // Convert structured JSON to plain text
+    const snapshot = this._formatStructuredSnapshot(formatted.nodes);
+    const truncationMessage = formatted.truncated ? `\n\n--- ${formatted.truncationMessage} ---` : '';
 
     return {
       content: [{
         type: 'text',
-        text: `### Page Snapshot\n\n${snapshot}`
+        text: `### Page Snapshot\n\n${snapshot}${truncationMessage}`
       }],
       isError: false
     };
+  }
+
+  /**
+   * Convert structured snapshot nodes to plain text
+   */
+  _formatStructuredSnapshot(nodes, depth = 0) {
+    if (!nodes || nodes.length === 0) return '';
+
+    const indent = '  '.repeat(depth);
+    let output = '';
+
+    for (const node of nodes) {
+      if (node.isGroupSummary) {
+        // Group summary line
+        output += `${indent}... ${node.groupCount} more ${node.role} element${node.groupCount > 1 ? 's' : ''} skipped\n`;
+      } else {
+        // Regular node
+        const nameStr = node.name ? `: ${node.name}` : '';
+        const selectorHint = node.selectorHint ? ` [${node.selectorHint}]` : '';
+        const valueStr = node.value ? `\n${indent}  value: "${node.value}"` : '';
+
+        output += `${indent}${node.role}${nameStr}${selectorHint}${valueStr}\n`;
+
+        // Recursively format children
+        if (node.children && node.children.length > 0) {
+          output += this._formatStructuredSnapshot(node.children, depth + 1);
+        }
+      }
+    }
+
+    return output;
   }
 
   _cleanTree(node) {

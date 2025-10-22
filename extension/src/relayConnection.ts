@@ -15,6 +15,7 @@
  */
 
 import { getStableClientId, storeExtensionId } from './utils/clientId';
+import { formatAccessibilitySnapshot } from './utils/snapshotFormatter';
 
 export function debugLog(...args: unknown[]): void {
   const enabled = true;
@@ -807,11 +808,20 @@ export class RelayConnection {
 
       // Forward CDP command to chrome.debugger with enhanced error handling
       try {
-        return await chrome.debugger.sendCommand(
+        const result = await chrome.debugger.sendCommand(
             debuggerSession,
             method,
             modifiedParams
         );
+
+        // Post-process accessibility snapshots to reduce size
+        if (method === 'Accessibility.getFullAXTree' && result) {
+          const formatted = formatAccessibilitySnapshot(result as { nodes: any[] });
+          debugLog(`Formatted snapshot: ${formatted.totalLines} lines, truncated: ${formatted.truncated}`);
+          return { formattedSnapshot: formatted };
+        }
+
+        return result;
       } catch (error: any) {
         // Detect extension blocking errors
         if (error.message && error.message.includes('chrome-extension://')) {
