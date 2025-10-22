@@ -229,9 +229,9 @@ export class RelayConnection {
         return;
       }
 
-      // Main page context: first non-extension context without a parent frame
-      // or the default context (auxData.isDefault=true)
-      if (this._mainContextId === null || !context.auxData?.frameId || context.auxData?.isDefault) {
+      // Main page context: ONLY set once on first non-extension context
+      // Don't update unless it gets destroyed - this prevents iframes from hijacking the main context
+      if (this._mainContextId === null) {
         this._mainContextId = context.id;
         debugLog(`Main page context set: ${context.id} (origin: ${context.origin})`);
       }
