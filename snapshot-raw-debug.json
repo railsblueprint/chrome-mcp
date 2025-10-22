@@ -44,13 +44,6 @@
           }
         },
         {
-          "name": "focused",
-          "value": {
-            "type": "booleanOrUndefined",
-            "value": true
-          }
-        },
-        {
           "name": "url",
           "value": {
             "type": "string",
@@ -93,7 +86,7 @@
       "backendDOMNodeId": 155,
       "childIds": [
         "156",
-        "31"
+        "12"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -153,9 +146,9 @@
       }
     },
     {
-      "backendDOMNodeId": 31,
+      "backendDOMNodeId": 12,
       "childIds": [
-        "205",
+        "204",
         "191"
       ],
       "chromeRole": {
@@ -177,7 +170,7 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "31",
+      "nodeId": "12",
       "parentId": "155",
       "properties": [],
       "role": {
@@ -188,7 +181,7 @@
     {
       "backendDOMNodeId": 157,
       "childIds": [
-        "33"
+        "15"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -218,9 +211,9 @@
       }
     },
     {
-      "backendDOMNodeId": 205,
+      "backendDOMNodeId": 204,
       "childIds": [
-        "-1000000026"
+        "-1000000076"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -240,8 +233,8 @@
         "type": "computedString",
         "value": "Создано с помощью"
       },
-      "nodeId": "205",
-      "parentId": "31",
+      "nodeId": "204",
+      "parentId": "12",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -251,7 +244,7 @@
     {
       "backendDOMNodeId": 191,
       "childIds": [
-        "206"
+        "205"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -285,7 +278,7 @@
         "value": " Rails Blueprint"
       },
       "nodeId": "191",
-      "parentId": "31",
+      "parentId": "12",
       "properties": [
         {
           "name": "focusable",
@@ -308,9 +301,9 @@
       }
     },
     {
-      "backendDOMNodeId": 33,
+      "backendDOMNodeId": 15,
       "childIds": [
-        "19"
+        "6"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -335,7 +328,7 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "33",
+      "nodeId": "15",
       "parentId": "157",
       "properties": [],
       "role": {
@@ -354,8 +347,8 @@
         "type": "computedString",
         "value": "Создано с помощью"
       },
-      "nodeId": "-1000000026",
-      "parentId": "205",
+      "nodeId": "-1000000076",
+      "parentId": "204",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -363,9 +356,9 @@
       }
     },
     {
-      "backendDOMNodeId": 206,
+      "backendDOMNodeId": 205,
       "childIds": [
-        "-1000000027"
+        "-1000000077"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -385,7 +378,7 @@
         "type": "computedString",
         "value": " Rails Blueprint"
       },
-      "nodeId": "206",
+      "nodeId": "205",
       "parentId": "191",
       "properties": [],
       "role": {
@@ -394,7 +387,7 @@
       }
     },
     {
-      "backendDOMNodeId": 19,
+      "backendDOMNodeId": 6,
       "childIds": [
         "158"
       ],
@@ -417,8 +410,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "19",
-      "parentId": "33",
+      "nodeId": "6",
+      "parentId": "15",
       "properties": [],
       "role": {
         "type": "role",
@@ -436,8 +429,8 @@
         "type": "computedString",
         "value": " Rails Blueprint"
       },
-      "nodeId": "-1000000027",
-      "parentId": "206",
+      "nodeId": "-1000000077",
+      "parentId": "205",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -464,7 +457,7 @@
         }
       ],
       "nodeId": "158",
-      "parentId": "19",
+      "parentId": "6",
       "role": {
         "type": "role",
         "value": "none"
@@ -473,8 +466,8 @@
     {
       "backendDOMNodeId": 159,
       "childIds": [
-        "6",
-        "20"
+        "13",
+        "7"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -498,9 +491,9 @@
       }
     },
     {
-      "backendDOMNodeId": 6,
+      "backendDOMNodeId": 13,
       "childIds": [
-        "34",
+        "28",
         "160",
         "161"
       ],
@@ -535,7 +528,7 @@
         "type": "computedString",
         "value": " Blueprint MCP for Chrome"
       },
-      "nodeId": "6",
+      "nodeId": "13",
       "parentId": "159",
       "properties": [
         {
@@ -559,7 +552,7 @@
       }
     },
     {
-      "backendDOMNodeId": 20,
+      "backendDOMNodeId": 7,
       "childIds": [
         "162"
       ],
@@ -582,7 +575,7 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "20",
+      "nodeId": "7",
       "parentId": "159",
       "properties": [],
       "role": {
@@ -591,7 +584,7 @@
       }
     },
     {
-      "backendDOMNodeId": 34,
+      "backendDOMNodeId": 28,
       "childIds": [],
       "chromeRole": {
         "type": "internalRole",
@@ -620,8 +613,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "34",
-      "parentId": "6",
+      "nodeId": "28",
+      "parentId": "13",
       "properties": [
         {
           "name": "url",
@@ -639,7 +632,7 @@
     {
       "backendDOMNodeId": 160,
       "childIds": [
-        "-1000000002"
+        "-1000000053"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -660,7 +653,7 @@
         "value": "\n"
       },
       "nodeId": "160",
-      "parentId": "6",
+      "parentId": "13",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -704,7 +697,7 @@
         "value": "Blueprint MCP for Chrome"
       },
       "nodeId": "161",
-      "parentId": "6",
+      "parentId": "13",
       "properties": [
         {
           "name": "level",
@@ -739,7 +732,7 @@
         }
       ],
       "nodeId": "162",
-      "parentId": "20",
+      "parentId": "7",
       "role": {
         "type": "role",
         "value": "none"
@@ -855,7 +848,7 @@
       "childIds": [
         "166",
         "167",
-        "32",
+        "14",
         "172",
         "176"
       ],
@@ -947,9 +940,9 @@
     {
       "backendDOMNodeId": 179,
       "childIds": [
-        "23",
+        "10",
         "180",
-        "24"
+        "11"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -973,7 +966,7 @@
       }
     },
     {
-      "backendDOMNodeId": 23,
+      "backendDOMNodeId": 10,
       "childIds": [],
       "chromeRole": {
         "type": "internalRole",
@@ -998,7 +991,7 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "23",
+      "nodeId": "10",
       "parentId": "179",
       "properties": [
         {
@@ -1024,7 +1017,7 @@
     {
       "backendDOMNodeId": 180,
       "childIds": [
-        "200"
+        "199"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -1048,9 +1041,9 @@
       }
     },
     {
-      "backendDOMNodeId": 200,
+      "backendDOMNodeId": 199,
       "childIds": [
-        "-1000000011"
+        "-1000000061"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -1070,7 +1063,7 @@
         "type": "computedString",
         "value": "Или войти через"
       },
-      "nodeId": "200",
+      "nodeId": "199",
       "parentId": "180",
       "properties": [],
       "role": {
@@ -1079,7 +1072,7 @@
       }
     },
     {
-      "backendDOMNodeId": 24,
+      "backendDOMNodeId": 11,
       "childIds": [],
       "chromeRole": {
         "type": "internalRole",
@@ -1104,7 +1097,7 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "24",
+      "nodeId": "11",
       "parentId": "179",
       "properties": [
         {
@@ -1130,9 +1123,9 @@
     {
       "backendDOMNodeId": 181,
       "childIds": [
-        "7",
-        "8",
-        "9"
+        "16",
+        "17",
+        "18"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -1156,9 +1149,9 @@
       }
     },
     {
-      "backendDOMNodeId": 7,
+      "backendDOMNodeId": 16,
       "childIds": [
-        "13"
+        "22"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -1183,7 +1176,7 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "7",
+      "nodeId": "16",
       "parentId": "181",
       "properties": [],
       "role": {
@@ -1192,9 +1185,9 @@
       }
     },
     {
-      "backendDOMNodeId": 8,
+      "backendDOMNodeId": 17,
       "childIds": [
-        "15"
+        "24"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -1219,7 +1212,7 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "8",
+      "nodeId": "17",
       "parentId": "181",
       "properties": [],
       "role": {
@@ -1228,9 +1221,9 @@
       }
     },
     {
-      "backendDOMNodeId": 9,
+      "backendDOMNodeId": 18,
       "childIds": [
-        "17"
+        "26"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -1255,7 +1248,7 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "9",
+      "nodeId": "18",
       "parentId": "181",
       "properties": [],
       "role": {
@@ -1313,7 +1306,7 @@
         "type": "computedString",
         "value": "\n"
       },
-      "nodeId": "-1000000002",
+      "nodeId": "-1000000053",
       "parentId": "160",
       "properties": [],
       "role": {
@@ -1324,7 +1317,7 @@
     {
       "backendDOMNodeId": 192,
       "childIds": [
-        "-1000000003"
+        "-1000000054"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -1355,7 +1348,7 @@
     {
       "backendDOMNodeId": 193,
       "childIds": [
-        "-1000000004"
+        "-1000000055"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -1436,7 +1429,7 @@
     {
       "backendDOMNodeId": 168,
       "childIds": [
-        "21",
+        "8",
         "1"
       ],
       "chromeRole": {
@@ -1461,7 +1454,7 @@
       }
     },
     {
-      "backendDOMNodeId": 21,
+      "backendDOMNodeId": 8,
       "childIds": [
         "194"
       ],
@@ -1488,7 +1481,7 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "21",
+      "nodeId": "8",
       "parentId": "168",
       "properties": [],
       "role": {
@@ -1521,7 +1514,7 @@
             "nativeSourceValue": {
               "relatedNodes": [
                 {
-                  "backendDOMNodeId": 21,
+                  "backendDOMNodeId": 8,
                   "text": "Адрес электронной почты"
                 }
               ],
@@ -1614,7 +1607,7 @@
           "value": {
             "relatedNodes": [
               {
-                "backendDOMNodeId": 21,
+                "backendDOMNodeId": 8,
                 "text": "Адрес электронной почты"
               }
             ],
@@ -1625,14 +1618,10 @@
       "role": {
         "type": "role",
         "value": "textbox"
-      },
-      "value": {
-        "type": "string",
-        "value": "test@example.com"
       }
     },
     {
-      "backendDOMNodeId": 32,
+      "backendDOMNodeId": 14,
       "childIds": [
         "170"
       ],
@@ -1650,7 +1639,7 @@
           }
         }
       ],
-      "nodeId": "32",
+      "nodeId": "14",
       "parentId": "2",
       "role": {
         "type": "role",
@@ -1660,7 +1649,7 @@
     {
       "backendDOMNodeId": 170,
       "childIds": [
-        "22",
+        "9",
         "3"
       ],
       "chromeRole": {
@@ -1678,16 +1667,16 @@
         }
       ],
       "nodeId": "170",
-      "parentId": "32",
+      "parentId": "14",
       "role": {
         "type": "role",
         "value": "none"
       }
     },
     {
-      "backendDOMNodeId": 22,
+      "backendDOMNodeId": 9,
       "childIds": [
-        "196"
+        "195"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -1712,7 +1701,7 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "22",
+      "nodeId": "9",
       "parentId": "170",
       "properties": [],
       "role": {
@@ -1745,7 +1734,7 @@
             "nativeSourceValue": {
               "relatedNodes": [
                 {
-                  "backendDOMNodeId": 22,
+                  "backendDOMNodeId": 9,
                   "text": "Пароль"
                 }
               ],
@@ -1845,7 +1834,7 @@
           "value": {
             "relatedNodes": [
               {
-                "backendDOMNodeId": 22,
+                "backendDOMNodeId": 9,
                 "text": "Пароль"
               }
             ],
@@ -1859,7 +1848,7 @@
       },
       "value": {
         "type": "string",
-        "value": "•••••••••••••"
+        "value": "••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••"
       }
     },
     {
@@ -1950,7 +1939,7 @@
     {
       "backendDOMNodeId": 176,
       "childIds": [
-        "12"
+        "21"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -1990,8 +1979,8 @@
         "type": "computedString",
         "value": "Или войти через"
       },
-      "nodeId": "-1000000011",
-      "parentId": "200",
+      "nodeId": "-1000000061",
+      "parentId": "199",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -1999,9 +1988,9 @@
       }
     },
     {
-      "backendDOMNodeId": 13,
+      "backendDOMNodeId": 22,
       "childIds": [
-        "25"
+        "29"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2050,8 +2039,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "13",
-      "parentId": "7",
+      "nodeId": "22",
+      "parentId": "16",
       "properties": [
         {
           "name": "invalid",
@@ -2074,9 +2063,9 @@
       }
     },
     {
-      "backendDOMNodeId": 15,
+      "backendDOMNodeId": 24,
       "childIds": [
-        "27"
+        "31"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2125,8 +2114,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "15",
-      "parentId": "8",
+      "nodeId": "24",
+      "parentId": "17",
       "properties": [
         {
           "name": "invalid",
@@ -2149,9 +2138,9 @@
       }
     },
     {
-      "backendDOMNodeId": 17,
+      "backendDOMNodeId": 26,
       "childIds": [
-        "29"
+        "33"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2200,8 +2189,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "17",
-      "parentId": "9",
+      "nodeId": "26",
+      "parentId": "18",
       "properties": [
         {
           "name": "invalid",
@@ -2226,7 +2215,7 @@
     {
       "backendDOMNodeId": 183,
       "childIds": [
-        "201"
+        "200"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2285,7 +2274,7 @@
     {
       "backendDOMNodeId": 184,
       "childIds": [
-        "-1000000019"
+        "-1000000069"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2316,7 +2305,7 @@
     {
       "backendDOMNodeId": 185,
       "childIds": [
-        "202"
+        "201"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2375,7 +2364,7 @@
     {
       "backendDOMNodeId": 186,
       "childIds": [
-        "-1000000021"
+        "-1000000071"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2406,7 +2395,7 @@
     {
       "backendDOMNodeId": 187,
       "childIds": [
-        "203"
+        "202"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2465,7 +2454,7 @@
     {
       "backendDOMNodeId": 188,
       "childIds": [
-        "-1000000023"
+        "-1000000073"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2496,7 +2485,7 @@
     {
       "backendDOMNodeId": 189,
       "childIds": [
-        "204"
+        "203"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2555,7 +2544,7 @@
     {
       "backendDOMNodeId": 190,
       "childIds": [
-        "-1000000025"
+        "-1000000075"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2594,7 +2583,7 @@
         "type": "computedString",
         "value": "Blueprint MCP for Chrome"
       },
-      "nodeId": "-1000000003",
+      "nodeId": "-1000000054",
       "parentId": "192",
       "properties": [],
       "role": {
@@ -2613,7 +2602,7 @@
         "type": "computedString",
         "value": "Войти в вашу учётную запись"
       },
-      "nodeId": "-1000000004",
+      "nodeId": "-1000000055",
       "parentId": "193",
       "properties": [],
       "role": {
@@ -2624,7 +2613,7 @@
     {
       "backendDOMNodeId": 194,
       "childIds": [
-        "-1000000005"
+        "-1000000056"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2645,7 +2634,7 @@
         "value": "Адрес электронной почты"
       },
       "nodeId": "194",
-      "parentId": "21",
+      "parentId": "8",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -2654,9 +2643,7 @@
     },
     {
       "backendDOMNodeId": 169,
-      "childIds": [
-        "195"
-      ],
+      "childIds": [],
       "chromeRole": {
         "type": "internalRole",
         "value": 88
@@ -2693,9 +2680,9 @@
       }
     },
     {
-      "backendDOMNodeId": 196,
+      "backendDOMNodeId": 195,
       "childIds": [
-        "-1000000007"
+        "-1000000057"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2715,8 +2702,8 @@
         "type": "computedString",
         "value": "Пароль"
       },
-      "nodeId": "196",
-      "parentId": "22",
+      "nodeId": "195",
+      "parentId": "9",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -2726,7 +2713,7 @@
     {
       "backendDOMNodeId": 171,
       "childIds": [
-        "197"
+        "196"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2856,7 +2843,7 @@
     {
       "backendDOMNodeId": 175,
       "childIds": [
-        "198"
+        "197"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2890,9 +2877,9 @@
       }
     },
     {
-      "backendDOMNodeId": 12,
+      "backendDOMNodeId": 21,
       "childIds": [
-        "199"
+        "198"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -2938,7 +2925,7 @@
         "type": "computedString",
         "value": "Войти"
       },
-      "nodeId": "12",
+      "nodeId": "21",
       "parentId": "176",
       "properties": [
         {
@@ -2959,70 +2946,6 @@
       "role": {
         "type": "role",
         "value": "button"
-      }
-    },
-    {
-      "backendDOMNodeId": 25,
-      "childIds": [
-        "26"
-      ],
-      "chromeRole": {
-        "type": "internalRole",
-        "value": 88
-      },
-      "ignored": false,
-      "name": {
-        "sources": [
-          {
-            "attribute": "aria-labelledby",
-            "type": "relatedElement"
-          },
-          {
-            "attribute": "aria-label",
-            "type": "attribute"
-          }
-        ],
-        "type": "computedString",
-        "value": ""
-      },
-      "nodeId": "25",
-      "parentId": "13",
-      "properties": [],
-      "role": {
-        "type": "role",
-        "value": "generic"
-      }
-    },
-    {
-      "backendDOMNodeId": 27,
-      "childIds": [
-        "28"
-      ],
-      "chromeRole": {
-        "type": "internalRole",
-        "value": 88
-      },
-      "ignored": false,
-      "name": {
-        "sources": [
-          {
-            "attribute": "aria-labelledby",
-            "type": "relatedElement"
-          },
-          {
-            "attribute": "aria-label",
-            "type": "attribute"
-          }
-        ],
-        "type": "computedString",
-        "value": ""
-      },
-      "nodeId": "27",
-      "parentId": "15",
-      "properties": [],
-      "role": {
-        "type": "role",
-        "value": "generic"
       }
     },
     {
@@ -3050,7 +2973,7 @@
         "value": ""
       },
       "nodeId": "29",
-      "parentId": "17",
+      "parentId": "22",
       "properties": [],
       "role": {
         "type": "role",
@@ -3058,9 +2981,73 @@
       }
     },
     {
-      "backendDOMNodeId": 201,
+      "backendDOMNodeId": 31,
       "childIds": [
-        "-1000000018"
+        "32"
+      ],
+      "chromeRole": {
+        "type": "internalRole",
+        "value": 88
+      },
+      "ignored": false,
+      "name": {
+        "sources": [
+          {
+            "attribute": "aria-labelledby",
+            "type": "relatedElement"
+          },
+          {
+            "attribute": "aria-label",
+            "type": "attribute"
+          }
+        ],
+        "type": "computedString",
+        "value": ""
+      },
+      "nodeId": "31",
+      "parentId": "24",
+      "properties": [],
+      "role": {
+        "type": "role",
+        "value": "generic"
+      }
+    },
+    {
+      "backendDOMNodeId": 33,
+      "childIds": [
+        "34"
+      ],
+      "chromeRole": {
+        "type": "internalRole",
+        "value": 88
+      },
+      "ignored": false,
+      "name": {
+        "sources": [
+          {
+            "attribute": "aria-labelledby",
+            "type": "relatedElement"
+          },
+          {
+            "attribute": "aria-label",
+            "type": "attribute"
+          }
+        ],
+        "type": "computedString",
+        "value": ""
+      },
+      "nodeId": "33",
+      "parentId": "26",
+      "properties": [],
+      "role": {
+        "type": "role",
+        "value": "generic"
+      }
+    },
+    {
+      "backendDOMNodeId": 200,
+      "childIds": [
+        "-1000000068"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3080,7 +3067,7 @@
         "type": "computedString",
         "value": "Зарегистрироваться"
       },
-      "nodeId": "201",
+      "nodeId": "200",
       "parentId": "183",
       "properties": [],
       "role": {
@@ -3099,7 +3086,7 @@
         "type": "computedString",
         "value": "\n"
       },
-      "nodeId": "-1000000019",
+      "nodeId": "-1000000069",
       "parentId": "184",
       "properties": [],
       "role": {
@@ -3108,9 +3095,9 @@
       }
     },
     {
-      "backendDOMNodeId": 202,
+      "backendDOMNodeId": 201,
       "childIds": [
-        "-1000000020"
+        "-1000000070"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3130,7 +3117,7 @@
         "type": "computedString",
         "value": "Забыли пароль?"
       },
-      "nodeId": "202",
+      "nodeId": "201",
       "parentId": "185",
       "properties": [],
       "role": {
@@ -3149,7 +3136,7 @@
         "type": "computedString",
         "value": "\n"
       },
-      "nodeId": "-1000000021",
+      "nodeId": "-1000000071",
       "parentId": "186",
       "properties": [],
       "role": {
@@ -3158,9 +3145,9 @@
       }
     },
     {
-      "backendDOMNodeId": 203,
+      "backendDOMNodeId": 202,
       "childIds": [
-        "-1000000022"
+        "-1000000072"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3180,7 +3167,7 @@
         "type": "computedString",
         "value": "Не получили инструкции по подтверждению?"
       },
-      "nodeId": "203",
+      "nodeId": "202",
       "parentId": "187",
       "properties": [],
       "role": {
@@ -3199,7 +3186,7 @@
         "type": "computedString",
         "value": "\n"
       },
-      "nodeId": "-1000000023",
+      "nodeId": "-1000000073",
       "parentId": "188",
       "properties": [],
       "role": {
@@ -3208,9 +3195,9 @@
       }
     },
     {
-      "backendDOMNodeId": 204,
+      "backendDOMNodeId": 203,
       "childIds": [
-        "-1000000024"
+        "-1000000074"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3230,7 +3217,7 @@
         "type": "computedString",
         "value": "Не получили инструкции по разблокировке?"
       },
-      "nodeId": "204",
+      "nodeId": "203",
       "parentId": "189",
       "properties": [],
       "role": {
@@ -3249,7 +3236,7 @@
         "type": "computedString",
         "value": "\n"
       },
-      "nodeId": "-1000000025",
+      "nodeId": "-1000000075",
       "parentId": "190",
       "properties": [],
       "role": {
@@ -3268,51 +3255,12 @@
         "type": "computedString",
         "value": "Адрес электронной почты"
       },
-      "nodeId": "-1000000005",
+      "nodeId": "-1000000056",
       "parentId": "194",
       "properties": [],
       "role": {
         "type": "internalRole",
         "value": "InlineTextBox"
-      }
-    },
-    {
-      "backendDOMNodeId": 195,
-      "childIds": [
-        "-1000000006"
-      ],
-      "chromeRole": {
-        "type": "internalRole",
-        "value": 158
-      },
-      "ignored": false,
-      "name": {
-        "sources": [
-          {
-            "type": "contents",
-            "value": {
-              "type": "computedString",
-              "value": "test@example.com"
-            }
-          }
-        ],
-        "type": "computedString",
-        "value": "test@example.com"
-      },
-      "nodeId": "195",
-      "parentId": "169",
-      "properties": [
-        {
-          "name": "editable",
-          "value": {
-            "type": "token",
-            "value": "plaintext"
-          }
-        }
-      ],
-      "role": {
-        "type": "internalRole",
-        "value": "StaticText"
       }
     },
     {
@@ -3326,8 +3274,8 @@
         "type": "computedString",
         "value": "Пароль"
       },
-      "nodeId": "-1000000007",
-      "parentId": "196",
+      "nodeId": "-1000000057",
+      "parentId": "195",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3335,9 +3283,9 @@
       }
     },
     {
-      "backendDOMNodeId": 197,
+      "backendDOMNodeId": 196,
       "childIds": [
-        "-1000000008"
+        "-1000000058"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3350,14 +3298,14 @@
             "type": "contents",
             "value": {
               "type": "computedString",
-              "value": "•••••••••••••"
+              "value": "••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••"
             }
           }
         ],
         "type": "computedString",
-        "value": "•••••••••••••"
+        "value": "••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••"
       },
-      "nodeId": "197",
+      "nodeId": "196",
       "parentId": "171",
       "properties": [
         {
@@ -3374,9 +3322,9 @@
       }
     },
     {
-      "backendDOMNodeId": 198,
+      "backendDOMNodeId": 197,
       "childIds": [
-        "-1000000009"
+        "-1000000059"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3396,7 +3344,7 @@
         "type": "computedString",
         "value": "Запомнить меня"
       },
-      "nodeId": "198",
+      "nodeId": "197",
       "parentId": "175",
       "properties": [],
       "role": {
@@ -3405,9 +3353,9 @@
       }
     },
     {
-      "backendDOMNodeId": 199,
+      "backendDOMNodeId": 198,
       "childIds": [
-        "-1000000010"
+        "-1000000060"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3427,8 +3375,8 @@
         "type": "computedString",
         "value": "Войти"
       },
-      "nodeId": "199",
-      "parentId": "12",
+      "nodeId": "198",
+      "parentId": "21",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3436,73 +3384,9 @@
       }
     },
     {
-      "backendDOMNodeId": 26,
-      "childIds": [
-        "-1000000012"
-      ],
-      "chromeRole": {
-        "type": "internalRole",
-        "value": 88
-      },
-      "ignored": false,
-      "name": {
-        "sources": [
-          {
-            "attribute": "aria-labelledby",
-            "type": "relatedElement"
-          },
-          {
-            "attribute": "aria-label",
-            "type": "attribute"
-          }
-        ],
-        "type": "computedString",
-        "value": ""
-      },
-      "nodeId": "26",
-      "parentId": "25",
-      "properties": [],
-      "role": {
-        "type": "role",
-        "value": "generic"
-      }
-    },
-    {
-      "backendDOMNodeId": 28,
-      "childIds": [
-        "-1000000014"
-      ],
-      "chromeRole": {
-        "type": "internalRole",
-        "value": 88
-      },
-      "ignored": false,
-      "name": {
-        "sources": [
-          {
-            "attribute": "aria-labelledby",
-            "type": "relatedElement"
-          },
-          {
-            "attribute": "aria-label",
-            "type": "attribute"
-          }
-        ],
-        "type": "computedString",
-        "value": ""
-      },
-      "nodeId": "28",
-      "parentId": "27",
-      "properties": [],
-      "role": {
-        "type": "role",
-        "value": "generic"
-      }
-    },
-    {
       "backendDOMNodeId": 30,
       "childIds": [
-        "-1000000016"
+        "-1000000062"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3532,6 +3416,70 @@
       }
     },
     {
+      "backendDOMNodeId": 32,
+      "childIds": [
+        "-1000000064"
+      ],
+      "chromeRole": {
+        "type": "internalRole",
+        "value": 88
+      },
+      "ignored": false,
+      "name": {
+        "sources": [
+          {
+            "attribute": "aria-labelledby",
+            "type": "relatedElement"
+          },
+          {
+            "attribute": "aria-label",
+            "type": "attribute"
+          }
+        ],
+        "type": "computedString",
+        "value": ""
+      },
+      "nodeId": "32",
+      "parentId": "31",
+      "properties": [],
+      "role": {
+        "type": "role",
+        "value": "generic"
+      }
+    },
+    {
+      "backendDOMNodeId": 34,
+      "childIds": [
+        "-1000000066"
+      ],
+      "chromeRole": {
+        "type": "internalRole",
+        "value": 88
+      },
+      "ignored": false,
+      "name": {
+        "sources": [
+          {
+            "attribute": "aria-labelledby",
+            "type": "relatedElement"
+          },
+          {
+            "attribute": "aria-label",
+            "type": "attribute"
+          }
+        ],
+        "type": "computedString",
+        "value": ""
+      },
+      "nodeId": "34",
+      "parentId": "33",
+      "properties": [],
+      "role": {
+        "type": "role",
+        "value": "generic"
+      }
+    },
+    {
       "childIds": [],
       "chromeRole": {
         "type": "internalRole",
@@ -3542,8 +3490,8 @@
         "type": "computedString",
         "value": "Зарегистрироваться"
       },
-      "nodeId": "-1000000018",
-      "parentId": "201",
+      "nodeId": "-1000000068",
+      "parentId": "200",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3561,8 +3509,8 @@
         "type": "computedString",
         "value": "Забыли пароль?"
       },
-      "nodeId": "-1000000020",
-      "parentId": "202",
+      "nodeId": "-1000000070",
+      "parentId": "201",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3580,8 +3528,8 @@
         "type": "computedString",
         "value": "Не получили инструкции по подтверждению?"
       },
-      "nodeId": "-1000000022",
-      "parentId": "203",
+      "nodeId": "-1000000072",
+      "parentId": "202",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3599,8 +3547,8 @@
         "type": "computedString",
         "value": "Не получили инструкции по разблокировке?"
       },
-      "nodeId": "-1000000024",
-      "parentId": "204",
+      "nodeId": "-1000000074",
+      "parentId": "203",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3616,37 +3564,10 @@
       "ignored": false,
       "name": {
         "type": "computedString",
-        "value": "test@example.com"
+        "value": "••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••"
       },
-      "nodeId": "-1000000006",
-      "parentId": "195",
-      "properties": [
-        {
-          "name": "editable",
-          "value": {
-            "type": "token",
-            "value": "plaintext"
-          }
-        }
-      ],
-      "role": {
-        "type": "internalRole",
-        "value": "InlineTextBox"
-      }
-    },
-    {
-      "childIds": [],
-      "chromeRole": {
-        "type": "internalRole",
-        "value": 101
-      },
-      "ignored": false,
-      "name": {
-        "type": "computedString",
-        "value": "•••••••••••••"
-      },
-      "nodeId": "-1000000008",
-      "parentId": "197",
+      "nodeId": "-1000000058",
+      "parentId": "196",
       "properties": [
         {
           "name": "editable",
@@ -3672,8 +3593,8 @@
         "type": "computedString",
         "value": "Запомнить меня"
       },
-      "nodeId": "-1000000009",
-      "parentId": "198",
+      "nodeId": "-1000000059",
+      "parentId": "197",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3691,8 +3612,8 @@
         "type": "computedString",
         "value": "Войти"
       },
-      "nodeId": "-1000000010",
-      "parentId": "199",
+      "nodeId": "-1000000060",
+      "parentId": "198",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3701,7 +3622,7 @@
     },
     {
       "childIds": [
-        "-1000000013"
+        "-1000000063"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3721,8 +3642,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "-1000000012",
-      "parentId": "26",
+      "nodeId": "-1000000062",
+      "parentId": "30",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3740,8 +3661,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "-1000000013",
-      "parentId": "-1000000012",
+      "nodeId": "-1000000063",
+      "parentId": "-1000000062",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3750,7 +3671,7 @@
     },
     {
       "childIds": [
-        "-1000000015"
+        "-1000000065"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3770,8 +3691,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "-1000000014",
-      "parentId": "28",
+      "nodeId": "-1000000064",
+      "parentId": "32",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3789,8 +3710,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "-1000000015",
-      "parentId": "-1000000014",
+      "nodeId": "-1000000065",
+      "parentId": "-1000000064",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3799,7 +3720,7 @@
     },
     {
       "childIds": [
-        "-1000000017"
+        "-1000000067"
       ],
       "chromeRole": {
         "type": "internalRole",
@@ -3819,8 +3740,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "-1000000016",
-      "parentId": "30",
+      "nodeId": "-1000000066",
+      "parentId": "34",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3838,8 +3759,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "-1000000017",
-      "parentId": "-1000000016",
+      "nodeId": "-1000000067",
+      "parentId": "-1000000066",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3857,8 +3778,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "-1000000013",
-      "parentId": "-1000000012",
+      "nodeId": "-1000000063",
+      "parentId": "-1000000062",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3876,8 +3797,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "-1000000015",
-      "parentId": "-1000000014",
+      "nodeId": "-1000000065",
+      "parentId": "-1000000064",
       "properties": [],
       "role": {
         "type": "internalRole",
@@ -3895,8 +3816,8 @@
         "type": "computedString",
         "value": ""
       },
-      "nodeId": "-1000000017",
-      "parentId": "-1000000016",
+      "nodeId": "-1000000067",
+      "parentId": "-1000000066",
       "properties": [],
       "role": {
         "type": "internalRole",

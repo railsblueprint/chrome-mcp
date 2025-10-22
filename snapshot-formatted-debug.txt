@@ -16,15 +16,13 @@ RootWebArea
             none
               LabelText
                 StaticText: Адрес электронной почты
-              textbox: Адрес электронной почты [input[placeholder="Адрес электронной почты"]]
-                value: "test@example.com"
-                StaticText: test@example.com
+              textbox: Адрес электронной почты [CSS: #id, input[type="..."], or input[name="..."]]
             none
               LabelText
                 StaticText: Пароль
-              textbox: Пароль [input[placeholder="Пароль"]]
-                value: "•••••••••••••"
-                StaticText: •••••••••••••
+              textbox: Пароль [CSS: #id, input[type="..."], or input[name="..."]]
+                value: "••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••"
+                StaticText: ••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
             generic
               checkbox: Запомнить меня
               LabelText

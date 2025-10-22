@@ -895,8 +895,13 @@ class UnifiedBackend {
               }
             });
 
-            const finalValue = valueResult.result?.value || '';
-            result = `Typed "${action.text}" into ${action.selector} (final value: "${finalValue}")`;
+            // Check if querySelector found the element
+            if (valueResult.result?.type === 'undefined') {
+              result = `Typed "${action.text}" into ${action.selector} (⚠️ value not verified - selector may not match typed element)`;
+            } else {
+              const finalValue = valueResult.result?.value || '';
+              result = `Typed "${action.text}" into ${action.selector} (final value: "${finalValue}")`;
+            }
             break;
           }
 
@@ -1641,17 +1646,9 @@ class UnifiedBackend {
       return ''; // No hint for non-form elements
     }
 
-    // Build selector based on available attributes
-    if (name) {
-      // Suggest attribute selector based on placeholder or label
-      return ` [input[placeholder="${name}"]]`;
-    } else if (value) {
-      // Suggest selector based on value
-      return ` [input[value="${value}"]]`;
-    } else {
-      // Generic input selector
-      return ` [input]`;
-    }
+    // Provide generic hint - we can't reliably suggest selectors from ARIA tree alone
+    // The 'name' is accessible name (from label/aria-label), not necessarily a real attribute
+    return ` [CSS: #id, input[type="..."], or input[name="..."]]`;
   }
 
   _formatAXTree(nodes, depth = 0, totalLines = { count: 0 }, maxLines = 200) {
