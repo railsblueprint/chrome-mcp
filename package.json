@@ -28,13 +28,6 @@
     "roll": "npm run copy-config && npm run lint",
     "postinstall": "patch-package"
   },
-  "exports": {
-    "./package.json": "./package.json",
-    ".": {
-      "types": "./index.d.ts",
-      "default": "./index.js"
-    }
-  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.5",
     "commander": "^14.0.1",
