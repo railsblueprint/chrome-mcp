@@ -392,6 +392,34 @@ class UnifiedBackend {
           type: 'object',
           properties: {}
         }
+      },
+
+      // Content extraction
+      {
+        name: 'browser_extract_content',
+        description: 'Extract page content as clean markdown. Auto-detects main content by default, or extracts from full page or specific selector. Supports pagination for large content.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            mode: {
+              type: 'string',
+              enum: ['auto', 'full', 'selector'],
+              description: 'Extraction mode: auto (smart detection of main content), full (entire page), selector (specific element). Default: auto'
+            },
+            selector: {
+              type: 'string',
+              description: 'CSS selector to extract from (only used when mode=selector)'
+            },
+            max_lines: {
+              type: 'number',
+              description: 'Maximum lines to extract (default: 500). Use with offset for pagination.'
+            },
+            offset: {
+              type: 'number',
+              description: 'Line number to start extraction from (default: 0). Use for pagination through large content.'
+            }
+          }
+        }
       }
     ];
   }
@@ -499,6 +527,10 @@ class UnifiedBackend {
 
         case 'browser_performance_metrics':
           result = await this._handlePerformanceMetrics(args);
+          break;
+
+        case 'browser_extract_content':
+          result = await this._handleExtractContent(args);
           break;
 
         default:
@@ -2415,6 +2447,266 @@ ${clsEmoji} Cumulative Layout Shift (CLS): ${timing.cls?.toFixed(3) || 'N/A'}
     } catch (error) {
       debugLog('Performance metrics error:', error);
       throw new Error(`Failed to collect performance metrics: ${error.message}`);
+    }
+  }
+
+  async _handleExtractContent(args) {
+    const mode = args.mode || 'auto';
+    const selector = args.selector;
+    const maxLines = args.max_lines || 500;
+    const offset = args.offset || 0;
+
+    debugLog(`Extracting content in ${mode} mode${selector ? ` with selector: ${selector}` : ''}, max_lines: ${maxLines}, offset: ${offset}`);
+
+    try {
+      // Execute content extraction in browser context
+      const result = await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: `
+            (() => {
+              const mode = ${JSON.stringify(mode)};
+              const customSelector = ${JSON.stringify(selector)};
+
+              // HTML to Markdown converter
+              function htmlToMarkdown(element, baseUrl) {
+                let markdown = '';
+
+                function processNode(node, indent = '') {
+                  if (node.nodeType === Node.TEXT_NODE) {
+                    const text = node.textContent.trim();
+                    if (text) markdown += text + ' ';
+                    return;
+                  }
+
+                  if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+                  const tag = node.tagName.toLowerCase();
+
+                  // Skip script, style, noscript
+                  if (['script', 'style', 'noscript', 'svg'].includes(tag)) return;
+
+                  switch (tag) {
+                    case 'h1':
+                      markdown += '\\n\\n# ' + node.textContent.trim() + '\\n\\n';
+                      break;
+                    case 'h2':
+                      markdown += '\\n\\n## ' + node.textContent.trim() + '\\n\\n';
+                      break;
+                    case 'h3':
+                      markdown += '\\n\\n### ' + node.textContent.trim() + '\\n\\n';
+                      break;
+                    case 'h4':
+                      markdown += '\\n\\n#### ' + node.textContent.trim() + '\\n\\n';
+                      break;
+                    case 'h5':
+                      markdown += '\\n\\n##### ' + node.textContent.trim() + '\\n\\n';
+                      break;
+                    case 'h6':
+                      markdown += '\\n\\n###### ' + node.textContent.trim() + '\\n\\n';
+                      break;
+
+                    case 'p':
+                      markdown += '\\n\\n';
+                      Array.from(node.childNodes).forEach(child => processNode(child, indent));
+                      markdown += '\\n\\n';
+                      break;
+
+                    case 'a':
+                      const href = node.getAttribute('href');
+                      const text = node.textContent.trim();
+                      if (href && text) {
+                        const fullUrl = new URL(href, baseUrl).href;
+                        markdown += \`[\${text}](\${fullUrl})\`;
+                      } else if (text) {
+                        markdown += text;
+                      }
+                      break;
+
+                    case 'img':
+                      const src = node.getAttribute('src');
+                      const alt = node.getAttribute('alt') || '';
+                      if (src) {
+                        const fullSrc = new URL(src, baseUrl).href;
+                        markdown += \`\\n\\n![\${alt}](\${fullSrc})\\n\\n\`;
+                      }
+                      break;
+
+                    case 'strong':
+                    case 'b':
+                      markdown += '**' + node.textContent.trim() + '**';
+                      break;
+
+                    case 'em':
+                    case 'i':
+                      markdown += '*' + node.textContent.trim() + '*';
+                      break;
+
+                    case 'code':
+                      if (node.parentElement.tagName.toLowerCase() === 'pre') {
+                        // Already handled in pre
+                        return;
+                      }
+                      markdown += \`\\\`\${node.textContent.trim()}\\\`\`;
+                      break;
+
+                    case 'pre':
+                      const code = node.querySelector('code');
+                      const codeText = code ? code.textContent : node.textContent;
+                      markdown += \`\\n\\n\\\`\\\`\\\`\\n\${codeText}\\n\\\`\\\`\\\`\\n\\n\`;
+                      break;
+
+                    case 'ul':
+                      markdown += '\\n';
+                      Array.from(node.children).forEach(li => {
+                        if (li.tagName.toLowerCase() === 'li') {
+                          markdown += indent + '- ';
+                          Array.from(li.childNodes).forEach(child => processNode(child, indent + '  '));
+                          markdown += '\\n';
+                        }
+                      });
+                      markdown += '\\n';
+                      break;
+
+                    case 'ol':
+                      markdown += '\\n';
+                      Array.from(node.children).forEach((li, idx) => {
+                        if (li.tagName.toLowerCase() === 'li') {
+                          markdown += indent + (idx + 1) + '. ';
+                          Array.from(li.childNodes).forEach(child => processNode(child, indent + '   '));
+                          markdown += '\\n';
+                        }
+                      });
+                      markdown += '\\n';
+                      break;
+
+                    case 'blockquote':
+                      markdown += '\\n\\n> ';
+                      Array.from(node.childNodes).forEach(child => processNode(child, indent));
+                      markdown += '\\n\\n';
+                      break;
+
+                    case 'hr':
+                      markdown += '\\n\\n---\\n\\n';
+                      break;
+
+                    case 'br':
+                      markdown += '  \\n';
+                      break;
+
+                    case 'table':
+                      // Skip tables for now - they're complex
+                      markdown += '\\n\\n[Table content omitted]\\n\\n';
+                      break;
+
+                    default:
+                      // Process children for other elements
+                      Array.from(node.childNodes).forEach(child => processNode(child, indent));
+                      break;
+                  }
+                }
+
+                processNode(element);
+                return markdown;
+              }
+
+              // Find content area based on mode
+              let contentElement;
+
+              if (mode === 'selector') {
+                if (!customSelector) {
+                  throw new Error('Selector required when mode is "selector"');
+                }
+                contentElement = document.querySelector(customSelector);
+                if (!contentElement) {
+                  throw new Error(\`Element not found: \${customSelector}\`);
+                }
+              } else if (mode === 'full') {
+                contentElement = document.body;
+              } else {
+                // Auto mode - smart detection
+                // Try common main content selectors
+                const selectors = [
+                  'article',
+                  'main',
+                  '[role="main"]',
+                  '.content',
+                  '#content',
+                  '.post',
+                  '.article'
+                ];
+
+                for (const sel of selectors) {
+                  const el = document.querySelector(sel);
+                  if (el && el.textContent.trim().length > 200) {
+                    contentElement = el;
+                    break;
+                  }
+                }
+
+                // Fallback to body if nothing found
+                if (!contentElement) {
+                  contentElement = document.body;
+                }
+              }
+
+              // Convert to markdown
+              const markdown = htmlToMarkdown(contentElement, window.location.href);
+
+              // Clean up excessive whitespace
+              const cleaned = markdown
+                .replace(/\\n{3,}/g, '\\n\\n')  // Max 2 consecutive newlines
+                .replace(/[ \\t]+/g, ' ')       // Collapse spaces
+                .trim();
+
+              return {
+                markdown: cleaned,
+                mode: mode,
+                detectedSelector: mode === 'auto' ? (contentElement.tagName.toLowerCase() + (contentElement.className ? '.' + contentElement.className.split(' ')[0] : '')) : null,
+                contentLength: cleaned.length
+              };
+            })()
+          `,
+          returnByValue: true
+        }
+      });
+
+      const data = result.result?.value;
+      if (!data || !data.markdown) {
+        throw new Error('Failed to extract content');
+      }
+
+      // Apply line-based pagination
+      const lines = data.markdown.split('\n');
+      const totalLines = lines.length;
+      const startLine = Math.min(offset, totalLines);
+      const endLine = Math.min(startLine + maxLines, totalLines);
+      const chunk = lines.slice(startLine, endLine).join('\n');
+      const truncated = endLine < totalLines;
+
+      let infoText = `### Extracted Content\n\n`;
+      infoText += `**Mode:** ${data.mode}\n`;
+      if (data.detectedSelector) {
+        infoText += `**Detected element:** ${data.detectedSelector}\n`;
+      }
+      infoText += `**Total lines:** ${totalLines}\n`;
+      infoText += `**Showing:** lines ${startLine + 1}-${endLine} (${endLine - startLine} lines)\n`;
+      if (truncated) {
+        infoText += `**⚠️ Truncated:** Use offset=${endLine} to get next chunk\n`;
+      }
+      infoText += `\n---\n\n`;
+      infoText += chunk;
+
+      return {
+        content: [{
+          type: 'text',
+          text: infoText
+        }],
+        isError: false
+      };
+    } catch (error) {
+      debugLog('Content extraction error:', error);
+      throw new Error(`Failed to extract content: ${error.message}`);
     }
   }
 
