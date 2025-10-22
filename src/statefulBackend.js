@@ -461,6 +461,22 @@ class StatefulBackend {
           this._proxyConnection = null;
         };
 
+        // Monitor tab info updates (keep _attachedTab in sync with actual browser state)
+        mcpConnection.onTabInfoUpdate = (tabInfo) => {
+          debugLog('[StatefulBackend] Tab info update:', tabInfo);
+
+          // Update cached tab info with fresh data from browser
+          if (this._attachedTab && this._attachedTab.id === tabInfo.id) {
+            this._attachedTab = {
+              ...this._attachedTab,
+              title: tabInfo.title,
+              url: tabInfo.url,
+              index: tabInfo.index
+            };
+            debugLog('[StatefulBackend] Updated cached tab info:', this._attachedTab);
+          }
+        };
+
         // Create ProxyTransport using the MCPConnection
         const transport = new ProxyTransport(mcpConnection);
 
@@ -747,6 +763,22 @@ class StatefulBackend {
 
         // Clear current connection state
         this._attachedTab = null;
+      };
+
+      // Monitor tab info updates (keep _attachedTab in sync with actual browser state)
+      mcpConnection.onTabInfoUpdate = (tabInfo) => {
+        debugLog('[StatefulBackend] Tab info update:', tabInfo);
+
+        // Update cached tab info with fresh data from browser
+        if (this._attachedTab && this._attachedTab.id === tabInfo.id) {
+          this._attachedTab = {
+            ...this._attachedTab,
+            title: tabInfo.title,
+            url: tabInfo.url,
+            index: tabInfo.index
+          };
+          debugLog('[StatefulBackend] Updated cached tab info:', this._attachedTab);
+        }
       };
 
       // Monitor connection close events (proxy connection lost)

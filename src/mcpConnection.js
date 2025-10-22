@@ -208,6 +208,12 @@ class MCPConnection {
     clearTimeout(pending.timeoutId);
     this._pendingRequests.delete(requestId);
 
+    // Extract current tab info if present and notify callback
+    if (message.currentTab && this.onTabInfoUpdate) {
+      debugLog('Tab info update:', message.currentTab);
+      this.onTabInfoUpdate(message.currentTab);
+    }
+
     if (message.error) {
       pending.reject(new Error(message.error.message || JSON.stringify(message.error)));
     } else {

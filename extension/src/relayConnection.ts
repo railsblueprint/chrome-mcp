@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { getStableClientId, storeExtensionId } from './utils/clientId';
+
 export function debugLog(...args: unknown[]): void {
   const enabled = true;
   if (enabled) {
@@ -66,8 +68,10 @@ export class RelayConnection {
   private _closed = false;
   private _stealthMode: boolean = false;
   private _connectionMap: Map<string, number> = new Map(); // connectionId → tabId
+  private _tabConnectionMap: Map<number, string> = new Map(); // tabId → connectionId (for error messages)
   private _browserName: string;
   private _accessToken?: string;
+  private _stableClientId?: string; // Stable client ID for rolling updates
   private _consoleMessages: Array<{ type: string; text: string; timestamp: number; url?: string; lineNumber?: number }> = [];
   private _networkRequests: Array<{ requestId: string; url: string; method: string; timestamp: number; statusCode?: number; statusText?: string; type?: string }> = [];
   private _requestsMap: Map<string, any> = new Map(); // requestId → request details
@@ -79,6 +83,7 @@ export class RelayConnection {
   onStealthModeSet?: (stealth: boolean) => void;
   onTabConnected?: (tabId: number) => void;
   onProjectConnected?: (projectName: string) => void;
+  onConnectionStatus?: (status: { max_connections: number; connections_used: number; connections_to_this_browser: number }) => void;
 
   constructor(ws: WebSocket, browserName: string, accessToken?: string) {
     this._debuggee = { };
@@ -444,6 +449,10 @@ export class RelayConnection {
       // Handle specific notifications
       if (message.method === 'disconnected') {
         await this._handleDisconnectedNotification(message.params);
+      } else if (message.method === 'connection_status') {
+        await this._handleConnectionStatusNotification(message.params);
+      } else if (message.method === 'authenticated') {
+        await this._handleAuthenticatedNotification(message.params);
       }
 
       // Just log it, don't send a response
@@ -494,6 +503,23 @@ export class RelayConnection {
       debugLog('Command completed successfully:', message.method);
       // Ensure result is always set, even if undefined (for JSON-RPC compliance)
       response.result = result !== undefined ? result : {};
+
+      // Add current tab info to every response so MCP can update its cached state
+      if (this._debuggee.tabId) {
+        try {
+          const tab = await chrome.tabs.get(this._debuggee.tabId);
+          (response as any).currentTab = {
+            id: tab.id,
+            title: tab.title,
+            url: tab.url,
+            index: tab.index
+          };
+          debugLog('Added current tab info to response:', tab.url);
+        } catch (error: any) {
+          debugLog('Failed to get current tab info:', error);
+          // Don't fail the whole response if tab info can't be retrieved
+        }
+      }
     } catch (error: any) {
       debugLog('Error handling command:', message.method, error);
       debugLog('Error stack:', error.stack);
@@ -536,6 +562,7 @@ export class RelayConnection {
 
         // Clear connection state
         this._connectionMap.delete(connectionId);
+        this._tabConnectionMap.delete(tabId);
 
         // If this was our current debuggee, clear it
         if (this._debuggee.tabId === tabId) {
@@ -550,13 +577,54 @@ export class RelayConnection {
     }
   }
 
+  private async _handleConnectionStatusNotification(params: any): Promise<void> {
+    debugLog('Received connection_status notification:', params);
+
+    // Notify the background script about connection status update
+    if (this.onConnectionStatus) {
+      this.onConnectionStatus({
+        max_connections: params.max_connections,
+        connections_used: params.connections_used,
+        connections_to_this_browser: params.connections_to_this_browser
+      });
+    }
+  }
+
+  private async _handleAuthenticatedNotification(params: any): Promise<void> {
+    debugLog('Received authenticated notification:', params);
+
+    // Store the extension_id assigned by the server
+    if (params.extension_id) {
+      await storeExtensionId(params.extension_id);
+      debugLog('Stored extension_id from server:', params.extension_id);
+    }
+
+    // Store user_id if provided
+    if (params.user_id) {
+      debugLog('User authenticated with ID:', params.user_id);
+    }
+
+    // Store and notify project name (client_id) if provided
+    if (params.client_id && this.onProjectConnected) {
+      debugLog('Project connected:', params.client_id);
+      this.onProjectConnected(params.client_id);
+    }
+  }
+
   private async _handleCommand(message: ProtocolCommand, connectionId?: string): Promise<any> {
     // Handle authenticate request from proxy (proxy-control mode)
     if (message.method === 'authenticate') {
       debugLog('Received authenticate request from proxy');
+
+      // Get or generate stable client_id for rolling updates
+      if (!this._stableClientId) {
+        this._stableClientId = await getStableClientId();
+      }
+
       return {
         name: this._browserName,
-        access_token: this._accessToken
+        access_token: this._accessToken,
+        client_id: this._stableClientId
       };
     }
 
@@ -668,7 +736,8 @@ export class RelayConnection {
           // In proxy mode, store connection mapping
           if (connectionId) {
             this._connectionMap.set(connectionId, tab.id);
-            debugLog(`Stored connection mapping: ${connectionId} → tab ${tab.id}`);
+            this._tabConnectionMap.set(tab.id, connectionId);
+            debugLog(`Stored connection mapping: ${connectionId} ↔ tab ${tab.id}`);
           }
 
           // Notify background script
@@ -1001,10 +1070,25 @@ export class RelayConnection {
     // Update the debuggee to attach to this tab
     this._debuggee = { tabId: selectedTab.id };
 
+    // Check if tab is already attached to another connection (in proxy mode)
+    if (connectionId) {
+      const existingConnectionId = this._tabConnectionMap.get(selectedTab.id);
+      if (existingConnectionId && existingConnectionId !== connectionId) {
+        throw new Error(
+          `Tab ${tabIndex} ("${selectedTab.title}") is already attached to another MCP connection.\n\n` +
+          `This tab is being used by another MCP client. Please:\n` +
+          `1. Use a different tab, OR\n` +
+          `2. Disconnect the other MCP client first\n\n` +
+          `Other connection ID: ${existingConnectionId}`
+        );
+      }
+    }
+
     // In proxy mode, store connection mapping
     if (connectionId) {
       this._connectionMap.set(connectionId, selectedTab.id);
-      debugLog(`Stored connection mapping: ${connectionId} → tab ${selectedTab.id}`);
+      this._tabConnectionMap.set(selectedTab.id, connectionId);
+      debugLog(`Stored connection mapping: ${connectionId} ↔ tab ${selectedTab.id}`);
     }
 
     // Notify background script about tab connection
@@ -1034,6 +1118,17 @@ export class RelayConnection {
           `Browser extension blocking debugging: ${extensionInfo}\n\n` +
           `This page has extensions that inject iframes, preventing automation. ` +
           `Please disable the blocking extension(s) and try again.\n\n` +
+          `Original error: ${error.message}`
+        );
+      }
+      // Improve "Another debugger" error message
+      if (error.message && error.message.includes('Another debugger')) {
+        throw new Error(
+          `Tab ${tabIndex} ("${selectedTab.title}") is already attached to another debugger/MCP.\n\n` +
+          `This usually means another MCP connection or DevTools is using this tab. Please:\n` +
+          `1. Close DevTools if open on this tab\n` +
+          `2. Disconnect other MCP clients\n` +
+          `3. Use a different tab\n\n` +
           `Original error: ${error.message}`
         );
       }
@@ -1069,7 +1164,8 @@ export class RelayConnection {
     // In proxy mode, store connection mapping
     if (connectionId) {
       this._connectionMap.set(connectionId, newTab.id);
-      debugLog(`Stored connection mapping: ${connectionId} → tab ${newTab.id}`);
+      this._tabConnectionMap.set(newTab.id, connectionId);
+      debugLog(`Stored connection mapping: ${connectionId} ↔ tab ${newTab.id}`);
     }
 
     // Notify background script about tab connection
@@ -1123,6 +1219,18 @@ export class RelayConnection {
           `Browser extension blocking debugging: ${extensionInfo}\n\n` +
           `This page has extensions that inject iframes, preventing automation. ` +
           `Please disable the blocking extension(s) and try again.\n\n` +
+          `Original error: ${error.message}`
+        );
+      }
+
+      // Improve "Another debugger" error message
+      if (error.message && error.message.includes('Another debugger')) {
+        throw new Error(
+          `New tab "${url}" is already attached to another debugger/MCP.\n\n` +
+          `This usually means another MCP connection or DevTools is using this tab. Please:\n` +
+          `1. Close DevTools if open on this tab\n` +
+          `2. Disconnect other MCP clients\n` +
+          `3. Try creating a different tab\n\n` +
           `Original error: ${error.message}`
         );
       }

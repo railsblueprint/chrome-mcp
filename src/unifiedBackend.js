@@ -179,10 +179,10 @@ class UnifiedBackend {
                 properties: {
                   type: {
                     type: 'string',
-                    enum: ['click', 'type', 'press_key', 'hover', 'wait', 'mouse_move', 'mouse_click', 'scroll_to', 'scroll_by', 'scroll_into_view', 'select_option', 'file_upload'],
+                    enum: ['click', 'type', 'clear', 'press_key', 'hover', 'wait', 'mouse_move', 'mouse_click', 'scroll_to', 'scroll_by', 'scroll_into_view', 'select_option', 'file_upload'],
                     description: 'Type of interaction'
                   },
-                  selector: { type: 'string', description: 'CSS selector (for click, type, hover, scroll_into_view, select_option, file_upload)' },
+                  selector: { type: 'string', description: 'CSS selector (for click, type, clear, hover, scroll_into_view, select_option, file_upload)' },
                   text: { type: 'string', description: 'Text to type (for type action)' },
                   key: { type: 'string', description: 'Key to press (for press_key action)' },
                   value: { type: 'string', description: 'Option value to select (for select_option action)' },
@@ -731,6 +731,35 @@ class UnifiedBackend {
     throw new Error(`Unknown navigation action: ${action}`);
   }
 
+  /**
+   * Validate CSS selector - reject common accessibility role names
+   */
+  _validateSelector(selector, context = '') {
+    // Common accessibility roles that should not be used as CSS selectors
+    const INVALID_SELECTORS = [
+      'textbox', 'button', 'link', 'heading', 'list', 'listitem',
+      'checkbox', 'radio', 'combobox', 'menu', 'menuitem', 'tab',
+      'tabpanel', 'dialog', 'alertdialog', 'toolbar', 'tooltip',
+      'navigation', 'search', 'banner', 'main', 'contentinfo',
+      'complementary', 'region', 'article', 'form', 'table',
+      'row', 'cell', 'columnheader', 'rowheader', 'grid',
+      'StaticText', 'paragraph', 'figure', 'img', 'image'
+    ];
+
+    if (INVALID_SELECTORS.includes(selector)) {
+      const suggestion = context ? ` ${context}` : '';
+      throw new Error(
+        `Invalid selector "${selector}". This is an accessibility role, not a CSS selector.${suggestion}\n\n` +
+        `Use CSS selectors instead:\n` +
+        `  - input[type="text"], input[placeholder="..."]  (for text fields)\n` +
+        `  - button, button[type="submit"]  (for buttons)\n` +
+        `  - #id, .class-name  (for any element with id or class)\n` +
+        `  - a[href="..."]  (for links)\n\n` +
+        `Check the accessibility snapshot for element names and values to construct proper selectors.`
+      );
+    }
+  }
+
   async _handleInteract(args) {
     const actions = args.actions || [];
     const onError = args.onError || 'stop';
@@ -750,6 +779,9 @@ class UnifiedBackend {
 
         switch (action.type) {
           case 'click': {
+            // Validate selector
+            this._validateSelector(action.selector);
+
             // Get element location
             const elemResult = await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Runtime.evaluate',
@@ -799,6 +831,9 @@ class UnifiedBackend {
           }
 
           case 'type': {
+            // Validate selector
+            this._validateSelector(action.selector);
+
             // Focus element first
             await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Runtime.evaluate',
@@ -819,7 +854,43 @@ class UnifiedBackend {
               });
             }
 
-            result = `Typed "${action.text}" into ${action.selector}`;
+            // Get the final value of the field after typing
+            const valueResult = await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `document.querySelector(${JSON.stringify(action.selector)})?.value`,
+                returnByValue: true
+              }
+            });
+
+            const finalValue = valueResult.result?.value || '';
+            result = `Typed "${action.text}" into ${action.selector} (final value: "${finalValue}")`;
+            break;
+          }
+
+          case 'clear': {
+            // Validate selector
+            this._validateSelector(action.selector);
+
+            // Clear the field by selecting all and deleting
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `
+                  (() => {
+                    const el = document.querySelector(${JSON.stringify(action.selector)});
+                    if (!el) return false;
+                    el.value = '';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                  })()
+                `,
+                returnByValue: true
+              }
+            });
+
+            result = `Cleared ${action.selector}`;
             break;
           }
 
@@ -875,6 +946,9 @@ class UnifiedBackend {
           }
 
           case 'hover': {
+            // Validate selector
+            this._validateSelector(action.selector);
+
             // Get element location
             const elemResult = await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Runtime.evaluate',
@@ -1018,6 +1092,9 @@ class UnifiedBackend {
           }
 
           case 'scroll_into_view': {
+            // Validate selector
+            this._validateSelector(action.selector);
+
             // Scroll element into view
             const scrollResult = await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Runtime.evaluate',
@@ -1043,6 +1120,9 @@ class UnifiedBackend {
           }
 
           case 'select_option': {
+            // Validate selector
+            this._validateSelector(action.selector);
+
             // Select option in dropdown
             const selectResult = await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Runtime.evaluate',
@@ -1069,6 +1149,9 @@ class UnifiedBackend {
           }
 
           case 'file_upload': {
+            // Validate selector
+            this._validateSelector(action.selector);
+
             // Upload file(s) to input element
             const files = action.files || [];
             if (files.length === 0) {
@@ -1515,6 +1598,30 @@ class UnifiedBackend {
     }
   }
 
+  /**
+   * Generate CSS selector hint for interactive elements
+   */
+  _generateSelectorHint(role, name, value) {
+    // Only provide hints for interactive form elements
+    const interactiveRoles = ['textbox', 'combobox', 'searchbox', 'spinbutton'];
+
+    if (!interactiveRoles.includes(role)) {
+      return ''; // No hint for non-form elements
+    }
+
+    // Build selector based on available attributes
+    if (name) {
+      // Suggest attribute selector based on placeholder or label
+      return ` [input[placeholder="${name}"]]`;
+    } else if (value) {
+      // Suggest selector based on value
+      return ` [input[value="${value}"]]`;
+    } else {
+      // Generic input selector
+      return ` [input]`;
+    }
+  }
+
   _formatAXTree(nodes, depth = 0, totalLines = { count: 0 }, maxLines = 200) {
     if (!nodes || nodes.length === 0) return '';
     if (totalLines.count >= maxLines) return '';
@@ -1548,7 +1655,11 @@ class UnifiedBackend {
           if (totalLines.count >= maxLines) break;
 
           const name = node.name?.value || '';
-          output += `${indent}${group.role}${name ? `: ${name}` : ''}\n`;
+          const value = node.value?.value || '';
+          const nameStr = name ? `: ${name}` : '';
+          const valueStr = value ? `\n${indent}  value: "${value}"` : '';
+          const selectorHint = this._generateSelectorHint(group.role, name, value);
+          output += `${indent}${group.role}${nameStr}${selectorHint}${valueStr}\n`;
           totalLines.count++;
 
           if (node.children && totalLines.count < maxLines) {
@@ -1565,7 +1676,11 @@ class UnifiedBackend {
           if (totalLines.count >= maxLines) break;
 
           const name = node.name?.value || '';
-          output += `${indent}${group.role}${name ? `: ${name}` : ''}\n`;
+          const value = node.value?.value || '';
+          const nameStr = name ? `: ${name}` : '';
+          const valueStr = value ? `\n${indent}  value: "${value}"` : '';
+          const selectorHint = this._generateSelectorHint(group.role, name, value);
+          output += `${indent}${group.role}${nameStr}${selectorHint}${valueStr}\n`;
           totalLines.count++;
 
           if (node.children && totalLines.count < maxLines) {
@@ -1583,7 +1698,11 @@ class UnifiedBackend {
           if (totalLines.count >= maxLines) break;
 
           const name = node.name?.value || '';
-          output += `${indent}${group.role}${name ? `: ${name}` : ''}\n`;
+          const value = node.value?.value || '';
+          const nameStr = name ? `: ${name}` : '';
+          const valueStr = value ? `\n${indent}  value: "${value}"` : '';
+          const selectorHint = this._generateSelectorHint(group.role, name, value);
+          output += `${indent}${group.role}${nameStr}${selectorHint}${valueStr}\n`;
           totalLines.count++;
 
           if (node.children && totalLines.count < maxLines) {

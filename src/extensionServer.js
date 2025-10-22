@@ -22,6 +22,7 @@ class ExtensionServer {
     this._wss = null;
     this._extensionWs = null; // Current extension WebSocket connection
     this._pendingRequests = new Map(); // requestId -> {resolve, reject}
+    this.onReconnect = null; // Callback when extension reconnects (replaces old connection)
   }
 
   /**
@@ -48,12 +49,19 @@ class ExtensionServer {
         debugLog('Extension connected');
 
         // Close previous connection if any
+        const isReconnection = !!this._extensionWs;
         if (this._extensionWs) {
-          debugLog('Closing previous extension connection');
+          debugLog('Closing previous extension connection - RECONNECTION DETECTED');
           this._extensionWs.close();
         }
 
         this._extensionWs = ws;
+
+        // Notify about reconnection after setting the new connection
+        if (isReconnection && this.onReconnect) {
+          debugLog('Calling onReconnect callback');
+          this.onReconnect();
+        }
 
         ws.on('message', (data) => {
           this._handleMessage(data);

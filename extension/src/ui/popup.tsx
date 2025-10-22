@@ -31,6 +31,8 @@ const Popup: React.FC = () => {
   const [browserName, setBrowserName] = useState<string>(getDefaultBrowserName());
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [port, setPort] = useState<string>('5555');
+  const [connectionStatus, setConnectionStatus] = useState<{ max_connections: number; connections_used: number; connections_to_this_browser: number } | null>(null);
+  const [projectName, setProjectName] = useState<string | null>(null);
 
   const updateStatus = async () => {
     // Get current tab
@@ -44,6 +46,7 @@ const Popup: React.FC = () => {
       setAnyConnected(response?.connected === true);
       setCurrentTabConnected(isCurrentTabConnected);
       setStealthMode(isCurrentTabConnected ? (response?.stealthMode ?? null) : null);
+      setProjectName(response?.projectName || null);
 
       // Set connecting state: enabled but not connected
       chrome.storage.local.get(['extensionEnabled'], (result) => {
@@ -57,13 +60,15 @@ const Popup: React.FC = () => {
     // Load initial state
     const loadState = async () => {
       console.log('[Popup] Loading state from storage...');
-      chrome.storage.local.get(['extensionEnabled', 'isPro', 'browserName', 'mcpPort'], (result) => {
+      chrome.storage.local.get(['extensionEnabled', 'isPro', 'browserName', 'mcpPort', 'connectionStatus'], (result) => {
         console.log('[Popup] Storage contents:', result);
         setEnabled(result.extensionEnabled !== false); // Default to true
         setIsPro(result.isPro === true); // Default to false
         setBrowserName(result.browserName || getDefaultBrowserName()); // Load or default
         setPort(result.mcpPort || '5555'); // Load port for free users
+        setConnectionStatus(result.connectionStatus || null); // Load connection status
         console.log('[Popup] Set isPro to:', result.isPro === true);
+        console.log('[Popup] Connection status:', result.connectionStatus);
       });
 
       // Load email from JWT token
@@ -111,6 +116,11 @@ const Popup: React.FC = () => {
         if (changes.accessToken) {
           const userInfo = await getUserInfoFromStorage();
           setUserEmail(userInfo?.email || null);
+        }
+        // Update connection status when it changes
+        if (changes.connectionStatus) {
+          setConnectionStatus(changes.connectionStatus.newValue || null);
+          console.log('[Popup] Connection status updated:', changes.connectionStatus.newValue);
         }
       }
     };
@@ -243,6 +253,15 @@ const Popup: React.FC = () => {
           <span className="status-text">{currentTabConnected ? '✓ Automated' : 'Not automated'}</span>
         </div>
 
+        {currentTabConnected && projectName && (
+          <div className="status-row">
+            <span className="status-label"></span>
+            <span className="status-text" style={{ fontSize: '0.9em', color: '#666' }}>
+              {projectName}
+            </span>
+          </div>
+        )}
+
         {currentTabConnected && (
           <div className="status-row">
             <span className="status-label">Stealth mode:</span>
@@ -284,6 +303,16 @@ const Popup: React.FC = () => {
             <div>
               <p className="pro-text">✓ PRO Account Active</p>
               {userEmail && <p className="pro-email">{userEmail}</p>}
+              {connectionStatus && (
+                <div className="connection-status">
+                  <p className="connection-limit">
+                    Connections: {connectionStatus.connections_used}/{connectionStatus.max_connections}
+                  </p>
+                  <p className="connection-browser">
+                    This browser: {connectionStatus.connections_to_this_browser}
+                  </p>
+                </div>
+              )}
             </div>
             <button className="logout-link" onClick={handleLogout}>
               Logout

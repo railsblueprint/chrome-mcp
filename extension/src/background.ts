@@ -230,6 +230,9 @@ class TabShareExtension {
         this._projectName = projectName;
         this._broadcastStatusChange();
       };
+      connection.onConnectionStatus = (status: { max_connections: number; connections_used: number; connections_to_this_browser: number }) => {
+        this._handleConnectionStatus(status);
+      };
       this._pendingTabSelection.set(selectorTabId, { connection });
     } catch (error: any) {
       throw new Error(`Failed to connect to MCP relay: ${error.message}`);
@@ -264,6 +267,11 @@ class TabShareExtension {
       this._activeConnection.onProjectConnected = (projectName: string) => {
         this._projectName = projectName;
         this._broadcastStatusChange();
+      };
+
+      // Set up connection status callback
+      this._activeConnection.onConnectionStatus = (status: { max_connections: number; connections_used: number; connections_to_this_browser: number }) => {
+        this._handleConnectionStatus(status);
       };
 
       // Set up tab connection callback
@@ -407,6 +415,20 @@ class TabShareExtension {
     this._projectName = null; // Reset project name
     await this._setConnectedTabId(null);
     await this._updateGlobalIcon(false);
+    this._broadcastStatusChange();
+  }
+
+  private _handleConnectionStatus(status: { max_connections: number; connections_used: number; connections_to_this_browser: number }): void {
+    debugLog('Connection status update:', status);
+
+    // Store connection status in chrome.storage for popup to access
+    chrome.storage.local.set({
+      connectionStatus: status
+    }).catch((error) => {
+      debugLog('Error storing connection status:', error);
+    });
+
+    // Broadcast status change to notify popup
     this._broadcastStatusChange();
   }
 
