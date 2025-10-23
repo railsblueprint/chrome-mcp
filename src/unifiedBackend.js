@@ -1110,6 +1110,18 @@ class UnifiedBackend {
             const { x, y, warning } = elemResult;
             const button = action.button || 'left';
 
+            // Move mouse to element first (some React apps check for mouse movement)
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Input.dispatchMouseEvent',
+              params: {
+                type: 'mouseMoved',
+                x, y
+              }
+            });
+
+            // Small delay to let React process the mouseMoved event
+            await new Promise(resolve => setTimeout(resolve, 50));
+
             // Click at coordinates
             await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Input.dispatchMouseEvent',
