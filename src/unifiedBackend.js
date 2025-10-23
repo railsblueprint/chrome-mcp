@@ -95,9 +95,10 @@ class UnifiedBackend {
   _addStatusHeader(response) {
     // Add status header to all browser tool responses
     if (this._statefulBackend && response && response.content) {
-      // DEBUG: Show what _attachedTab is
-      const attachedTab = this._statefulBackend._attachedTab;
-      const debugInfo = `\n🐛 DEBUG: _attachedTab = ${JSON.stringify(attachedTab)}\n`;
+      // DEBUG: Show what _attachedTab is (only in debug mode)
+      const debugInfo = global.DEBUG_MODE
+        ? `\n🐛 DEBUG: _attachedTab = ${JSON.stringify(this._statefulBackend._attachedTab)}\n`
+        : '';
 
       // Find the first text content item and prepend status header with response status
       const textContent = response.content.find(c => c && c.type === 'text');

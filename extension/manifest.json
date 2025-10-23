@@ -35,7 +35,10 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://localhost:4010/*"],
+      "matches": [
+        "http://localhost:4010/*",
+        "https://mcp-for-chrome.railsblueprint.com/*"
+      ],
       "js": ["lib/content-script.iife.js"],
       "run_at": "document_start"
     }
