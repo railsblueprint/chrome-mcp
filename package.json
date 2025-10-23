@@ -1,6 +1,6 @@
 {
   "name": "@railsblueprint/chrome-mcp",
-  "version": "0.1.37",
+  "version": "1.0.0",
   "description": "MCP server for Chrome browser automation using real browser profiles",
   "repository": {
     "type": "git",
@@ -18,14 +18,9 @@
     "lint": "npm run update-readme",
     "update-readme": "node update-readme.js",
     "docker-build": "docker build --no-cache -t playwright-mcp-dev:latest .",
-    "test": "playwright test",
-    "ctest": "playwright test --project=chrome",
-    "ftest": "playwright test --project=firefox",
-    "wtest": "playwright test --project=webkit",
-    "dtest": "MCP_IN_DOCKER=1 playwright test --project=chromium-docker",
-    "npm-publish": "npm run clean && npm run test && npm publish",
-    "copy-config": "cp ../playwright/packages/playwright/src/mcp/config.d.ts . && perl -pi -e \"s|import type \\* as playwright from 'playwright-core';|import type * as playwright from 'playwright';|\" ./config.d.ts",
-    "roll": "npm run copy-config && npm run lint",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "postinstall": "patch-package"
   },
   "dependencies": {
@@ -45,6 +40,7 @@
   "devDependencies": {
     "@playwright/test": "1.56.1",
     "@types/node": "^24.3.0",
+    "jest": "^30.2.0",
     "zod-to-json-schema": "^3.24.6"
   }
 }

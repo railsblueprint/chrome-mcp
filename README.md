@@ -1,948 +1,356 @@
-## Playwright MCP
+# Blueprint MCP for Chrome
 
-A Model Context Protocol (MCP) server that provides browser automation capabilities using [Playwright](https://playwright.dev). This server enables LLMs to interact with web pages through structured accessibility snapshots, bypassing the need for screenshots or visually-tuned models.
+> Control your real Chrome browser with AI through the Model Context Protocol
 
-### Key Features
+[![npm version](https://badge.fury.io/js/@railsblueprint%2Fchrome-mcp.svg)](https://www.npmjs.com/package/@railsblueprint/chrome-mcp)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-- **Fast and lightweight**. Uses Playwright's accessibility tree, not pixel-based input.
-- **LLM-friendly**. No vision models needed, operates purely on structured data.
-- **Deterministic tool application**. Avoids ambiguity common with screenshot-based approaches.
-- **Stealth Mode**. Optional Patchright integration for undetectable browser automation.
+## What is this?
 
-### Stealth Mode
+An MCP (Model Context Protocol) server that lets AI assistants control your actual Chrome browser through a browser extension. Unlike headless automation tools, this uses your real browser profile with all your logged-in sessions, cookies, and extensions intact.
 
-This MCP server supports an optional **Stealth Mode** that uses [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) instead of standard Playwright. Patchright is a patched version of Playwright that bypasses bot detection mechanisms used by anti-bot systems like Cloudflare, Kasada, and others.
+**Perfect for:** AI agents that need to interact with sites where you're already logged in, or that need to avoid bot detection.
 
-**How it works:**
-1. Connect with the `stealth` parameter: `connect({ stealth: true })`
-2. The server creates a separate browser instance using Patchright
-3. Multiple clients can connect simultaneously with different modes
-4. Each mode (regular/stealth) reuses its own browser instance
+## Why use this instead of Playwright/Puppeteer?
 
-**Example usage:**
-```javascript
-// Regular mode (default - full debugging)
-await use_mcp_tool("playwright", "connect", {});
+| Blueprint MCP for Chrome | Playwright/Puppeteer |
+|-------------------------|---------------------|
+| ✅ Real browser (not headless) | ❌ Headless or new browser instance |
+| ✅ Stays logged in to all your sites | ❌ Must re-authenticate each session |
+| ✅ Avoids bot detection (uses real fingerprint) | ⚠️ Often detected as automated browser |
+| ✅ Works with your existing browser extensions | ❌ No extension support |
+| ✅ Zero setup - works out of the box | ⚠️ Requires browser installation |
+| ❌ Chrome/Edge only | ✅ Chrome, Firefox, Safari support |
 
-// Stealth mode (bypasses bot detection)
-await use_mcp_tool("playwright", "connect", { stealth: true });
-```
+## Installation
 
-**Multi-client support:**
-- Client A connects with `{ stealth: false }` → Uses Playwright browser
-- Client B connects with `{ stealth: true }` → Uses Patchright browser
-- Both run simultaneously, sharing the Chrome extension but using different automation drivers
-
-**Trade-offs:**
-- **Regular Mode** (default): Full debugging capabilities including console logs and Runtime API access
-- **Stealth Mode**: Limited debugging (console API disabled) but undetectable by anti-bot systems
-
-**Note:** Stealth mode requires the `patchright` package to be installed (already included as a dependency).
-
-### Debug Mode
-
-For development and troubleshooting, the server supports a **Debug Mode** that can be enabled with the `--debug` flag:
+### 1. Install the MCP Server
 
 ```bash
-# Direct usage
-node cli.js --extension --debug
-
-# With wrapper (recommended)
-node mcp-wrapper.js --extension --debug
+npm install -g @railsblueprint/chrome-mcp
 ```
 
-**When debug mode is enabled:**
-- `mcp_reload_server` tool is available for restarting the MCP server
-- `browser_install` tool is available for installing browser binaries
-- Verbose logging is output to stderr for troubleshooting
+### 2. Install the Chrome Extension
 
-**When debug mode is disabled (default):**
-- Server reload and browser install tools are hidden
-- Logging is suppressed for cleaner output
-- Extension management tools (`browser_reload_extensions`, `browser_list_extensions`) remain visible as they're useful for debugging any browser extension
+**Option A: Chrome Web Store (Recommended)**
+- Visit: [Chrome Web Store link - Coming Soon]
 
-Debug mode is useful when:
-- Developing or testing the MCP server itself
-- Troubleshooting MCP server issues
-- Installing new browser versions
+**Option B: Manual Installation (Development)**
+1. Download the latest release from [Releases](https://github.com/railsblueprint/chrome-mcp/releases)
+2. Unzip the extension
+3. Open `chrome://extensions/`
+4. Enable "Developer mode"
+5. Click "Load unpacked" and select the `extension` folder
 
-### Requirements
-- Node.js 18 or newer
-- VS Code, Cursor, Windsurf, Claude Desktop, Goose or any other MCP client
+### 3. Configure your MCP client
 
-<!--
-// Generate using:
-node utils/generate-links.js
--->
-
-### Getting started
-
-First, install the Playwright MCP server with your client.
-
-**Standard config** works in most of the tools:
-
-```js
-{
-  "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": [
-        "@playwright/mcp@latest"
-      ]
-    }
-  }
-}
-```
-
-[<img src="https://img.shields.io/badge/VS_Code-VS_Code?style=flat-square&label=Install%20Server&color=0098FF" alt="Install in VS Code">](https://insiders.vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522playwright%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522%2540playwright%252Fmcp%2540latest%2522%255D%257D) [<img alt="Install in VS Code Insiders" src="https://img.shields.io/badge/VS_Code_Insiders-VS_Code_Insiders?style=flat-square&label=Install%20Server&color=24bfa5">](https://insiders.vscode.dev/redirect?url=vscode-insiders%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522playwright%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522%2540playwright%252Fmcp%2540latest%2522%255D%257D)
-
-<details>
-<summary>Amp</summary>
-
-Add via the Amp VS Code extension settings screen or by updating your settings.json file:
-
-```json
-"amp.mcpServers": {
-  "playwright": {
-    "command": "npx",
-    "args": [
-      "@playwright/mcp@latest"
-    ]
-  }
-}
-```
-
-**Amp CLI Setup:**
-
-Add via the `amp mcp add`command below
-
-```bash
-amp mcp add playwright -- npx @playwright/mcp@latest
-```
-
-</details>
-
-<details>
-<summary>Claude Code</summary>
-
-Use the Claude Code CLI to add the Playwright MCP server:
-
-```bash
-claude mcp add playwright npx @playwright/mcp@latest
-```
-</details>
-
-<details>
-<summary>Claude Desktop</summary>
-
-Follow the MCP install [guide](https://modelcontextprotocol.io/quickstart/user), use the standard config above.
-
-</details>
-
-<details>
-<summary>Codex</summary>
-
-Create or edit the configuration file `~/.codex/config.toml` and add:
-
-```toml
-[mcp_servers.playwright]
-command = "npx"
-args = ["@playwright/mcp@latest"]
-```
-
-For more information, see the [Codex MCP documentation](https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers).
-
-</details>
-
-<details>
-<summary>Cursor</summary>
-
-#### Click the button to install:
-
-[<img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Install in Cursor">](https://cursor.com/en/install-mcp?name=Playwright&config=eyJjb21tYW5kIjoibnB4IEBwbGF5d3JpZ2h0L21jcEBsYXRlc3QifQ%3D%3D)
-
-#### Or install manually:
-
-Go to `Cursor Settings` -> `MCP` -> `Add new MCP Server`. Name to your liking, use `command` type with the command `npx @playwright/mcp@latest`. You can also verify config or add command like arguments via clicking `Edit`.
-
-</details>
-
-<details>
-<summary>Gemini CLI</summary>
-
-Follow the MCP install [guide](https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md#configure-the-mcp-server-in-settingsjson), use the standard config above.
-
-</details>
-
-<details>
-<summary>Goose</summary>
-
-#### Click the button to install:
-
-[![Install in Goose](https://block.github.io/goose/img/extension-install-dark.svg)](https://block.github.io/goose/extension?cmd=npx&arg=%40playwright%2Fmcp%40latest&id=playwright&name=Playwright&description=Interact%20with%20web%20pages%20through%20structured%20accessibility%20snapshots%20using%20Playwright)
-
-#### Or install manually:
-
-Go to `Advanced settings` -> `Extensions` -> `Add custom extension`. Name to your liking, use type `STDIO`, and set the `command` to `npx @playwright/mcp`. Click "Add Extension".
-</details>
-
-<details>
-<summary>LM Studio</summary>
-
-#### Click the button to install:
-
-[![Add MCP Server playwright to LM Studio](https://files.lmstudio.ai/deeplink/mcp-install-light.svg)](https://lmstudio.ai/install-mcp?name=playwright&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyJAcGxheXdyaWdodC9tY3BAbGF0ZXN0Il19)
-
-#### Or install manually:
-
-Go to `Program` in the right sidebar -> `Install` -> `Edit mcp.json`. Use the standard config above.
-</details>
-
-<details>
-<summary>opencode</summary>
-
-Follow the MCP Servers [documentation](https://opencode.ai/docs/mcp-servers/). For example in `~/.config/opencode/opencode.json`:
-
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 ```json
 {
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "playwright": {
-      "type": "local",
-      "command": [
-        "npx",
-        "@playwright/mcp@latest"
-      ],
-      "enabled": true
+  "mcpServers": {
+    "chrome": {
+      "command": "chrome-mcp"
     }
   }
 }
+```
+
+**VS Code / Cursor** (`.vscode/settings.json`):
+```json
+{
+  "mcp.servers": {
+    "chrome": {
+      "command": "chrome-mcp"
+    }
+  }
+}
+```
+
+**Cline** (Claude Code CLI):
+```bash
+claude mcp add chrome chrome-mcp
+```
+
+## Quick Start
+
+1. **Start your MCP client** (Claude Desktop, Cursor, etc.)
+2. **Click the Blueprint MCP extension icon** in Chrome
+3. The extension auto-connects to the MCP server
+4. **Ask your AI assistant to browse!**
+
+**Example conversations:**
+```
+You: "Go to GitHub and check my notifications"
+AI: *navigates to github.com, clicks notifications, reads content*
+
+You: "Fill out this form with my info"
+AI: *reads form fields, fills them in, submits*
+
+You: "Take a screenshot of this page"
+AI: *captures screenshot and shows you*
+```
+
+## How it works
 
 ```
-</details>
+┌─────────────────────────┐
+│   AI Assistant          │
+│   (Claude, GPT, etc)    │
+└───────────┬─────────────┘
+            │
+            │ MCP Protocol
+            ↓
+┌─────────────────────────┐
+│   MCP Client            │
+│   (Claude Desktop, etc) │
+└───────────┬─────────────┘
+            │
+            │ stdio/JSON-RPC
+            ↓
+┌─────────────────────────┐
+│   chrome-mcp            │
+│   (this package)        │
+└───────────┬─────────────┘
+            │
+            │ WebSocket (localhost:5555 or cloud relay)
+            ↓
+┌─────────────────────────┐
+│   Chrome Extension      │
+└───────────┬─────────────┘
+            │
+            │ Chrome Extension APIs
+            ↓
+┌─────────────────────────┐
+│   Your Chrome Browser   │
+│   (real profile)        │
+└─────────────────────────┘
+```
 
-<details>
-<summary>Qodo Gen</summary>
+## Free vs PRO
 
-Open [Qodo Gen](https://docs.qodo.ai/qodo-documentation/qodo-gen) chat panel in VSCode or IntelliJ → Connect more tools → + Add new MCP → Paste the standard config above.
+### Free Tier (Default)
+- ✅ Local WebSocket connection (port 5555)
+- ✅ Single browser instance
+- ✅ All browser automation features
+- ✅ No account required
+- ❌ Limited to same machine
 
-Click <code>Save</code>.
-</details>
+### PRO Tier
+- ✅ **Cloud relay** - connect from anywhere
+- ✅ **Multiple browsers** - control multiple Chrome instances
+- ✅ **Shared access** - multiple AI clients can use same browser
+- ✅ **Auto-reconnect** - maintains connection through network changes
+- ✅ **Priority support**
 
-<details>
-<summary>VS Code</summary>
+[Upgrade to PRO](https://mcp-for-chrome.railsblueprint.com)
 
-#### Click the button to install:
+## Available Tools
 
-[<img src="https://img.shields.io/badge/VS_Code-VS_Code?style=flat-square&label=Install%20Server&color=0098FF" alt="Install in VS Code">](https://insiders.vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522playwright%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522%2540playwright%252Fmcp%2540latest%2522%255D%257D) [<img alt="Install in VS Code Insiders" src="https://img.shields.io/badge/VS_Code_Insiders-VS_Code_Insiders?style=flat-square&label=Install%20Server&color=24bfa5">](https://insiders.vscode.dev/redirect?url=vscode-insiders%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522playwright%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522%2540playwright%252Fmcp%2540latest%2522%255D%257D)
+The MCP server provides these tools to AI assistants:
 
-#### Or install manually:
+### Connection Management
+- `enable` - Activate browser automation (required first step)
+- `disable` - Deactivate browser automation
+- `status` - Check connection status
+- `auth` - Login to PRO account (for cloud relay features)
 
-Follow the MCP install [guide](https://code.visualstudio.com/docs/copilot/chat/mcp-servers#_add-an-mcp-server), use the standard config above. You can also install the Playwright MCP server using the VS Code CLI:
+### Tab Management
+- `browser_tabs` - List, create, attach to, or close browser tabs
+
+### Navigation
+- `browser_navigate` - Navigate to a URL
+- `browser_navigate_back` - Go back in history
+
+### Content & Inspection
+- `browser_snapshot` - Get accessible page content (recommended for reading pages)
+- `browser_take_screenshot` - Capture visual screenshot
+- `browser_console_messages` - Get browser console logs
+- `browser_network_requests` - Get network activity
+- `browser_extract_content` - Extract page content as markdown
+
+### Interaction
+- `browser_interact` - Perform multiple actions in sequence (click, type, hover, wait, etc.)
+- `browser_click` - Click on elements
+- `browser_type` - Type text into inputs
+- `browser_hover` - Hover over elements
+- `browser_select_option` - Select dropdown options
+- `browser_fill_form` - Fill multiple form fields at once
+- `browser_press_key` - Press keyboard keys
+- `browser_drag` - Drag and drop elements
+
+### Advanced
+- `browser_evaluate` - Execute JavaScript in page context
+- `browser_handle_dialog` - Handle alert/confirm/prompt dialogs
+- `browser_file_upload` - Upload files through file inputs
+- `browser_window` - Resize, minimize, maximize browser window
+- `browser_pdf_save` - Save current page as PDF
+- `browser_performance_metrics` - Get performance metrics
+- `browser_verify_text_visible` - Verify text is present (for testing)
+- `browser_verify_element_visible` - Verify element exists (for testing)
+
+### Extension Management
+- `browser_list_extensions` - List installed Chrome extensions
+- `browser_reload_extensions` - Reload extension (useful during development)
+
+## Development
+
+### Prerequisites
+- Node.js 18+
+- Chrome or Edge browser
+- npm or yarn
+
+### Setup
 
 ```bash
-# For VS Code
-code --add-mcp '{"name":"playwright","command":"npx","args":["@playwright/mcp@latest"]}'
+# Clone the repository
+git clone https://github.com/railsblueprint/chrome-mcp.git
+cd chrome-mcp
+
+# Install server dependencies
+npm install
+
+# Install extension dependencies
+cd extension
+npm install
+cd ..
 ```
 
-After installation, the Playwright MCP server will be available for use with your GitHub Copilot agent in VS Code.
-</details>
+### Running in Development
 
-<details>
-<summary>Warp</summary>
-
-Go to `Settings` -> `AI` -> `Manage MCP Servers` -> `+ Add` to [add an MCP Server](https://docs.warp.dev/knowledge-and-collaboration/mcp#adding-an-mcp-server). Use the standard config above.
-
-Alternatively, use the slash command `/add-mcp` in the Warp prompt and paste the standard config from above:
-```js
-{
-  "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": [
-        "@playwright/mcp@latest"
-      ]
-    }
-  }
-}
+**Terminal 1: Start MCP server in debug mode**
+```bash
+node cli.js --debug
 ```
 
-</details>
-
-<details>
-<summary>Windsurf</summary>
-
-Follow Windsurf MCP [documentation](https://docs.windsurf.com/windsurf/cascade/mcp). Use the standard config above.
-
-</details>
-
-### Configuration
-
-Playwright MCP server supports following arguments. They can be provided in the JSON configuration above, as a part of the `"args"` list:
-
-<!--- Options generated by update-readme.js -->
-
-```
-> npx @playwright/mcp@latest --help
-  --allowed-hosts <hosts...>            comma-separated list of hosts this
-                                        server is allowed to serve from.
-                                        Defaults to the host the server is bound
-                                        to. Pass '*' to disable the host check.
-  --allowed-origins <origins>           semicolon-separated list of origins to
-                                        allow the browser to request. Default is
-                                        to allow all.
-  --blocked-origins <origins>           semicolon-separated list of origins to
-                                        block the browser from requesting.
-                                        Blocklist is evaluated before allowlist.
-                                        If used without the allowlist, requests
-                                        not matching the blocklist are still
-                                        allowed.
-  --block-service-workers               block service workers
-  --browser <browser>                   browser or chrome channel to use,
-                                        possible values: chrome, firefox,
-                                        webkit, msedge.
-  --caps <caps>                         comma-separated list of additional
-                                        capabilities to enable, possible values:
-                                        vision, pdf.
-  --cdp-endpoint <endpoint>             CDP endpoint to connect to.
-  --cdp-header <headers...>             CDP headers to send with the connect
-                                        request, multiple can be specified.
-  --config <path>                       path to the configuration file.
-  --device <device>                     device to emulate, for example: "iPhone
-                                        15"
-  --executable-path <path>              path to the browser executable.
-  --extension                           Connect to a running browser instance
-                                        (Edge/Chrome only). Requires the
-                                        "Blueprint MCP for Chrome" browser
-                                        extension to be installed.
-  --debug                               Enable debug mode (shows reload/extension
-                                        tools and verbose logging)
-  --grant-permissions <permissions...>  List of permissions to grant to the
-                                        browser context, for example
-                                        "geolocation", "clipboard-read",
-                                        "clipboard-write".
-  --headless                            run browser in headless mode, headed by
-                                        default
-  --host <host>                         host to bind server to. Default is
-                                        localhost. Use 0.0.0.0 to bind to all
-                                        interfaces.
-  --ignore-https-errors                 ignore https errors
-  --init-script <path...>               path to JavaScript file to add as an
-                                        initialization script. The script will
-                                        be evaluated in every page before any of
-                                        the page's scripts. Can be specified
-                                        multiple times.
-  --isolated                            keep the browser profile in memory, do
-                                        not save it to disk.
-  --image-responses <mode>              whether to send image responses to the
-                                        client. Can be "allow" or "omit",
-                                        Defaults to "allow".
-  --no-sandbox                          disable the sandbox for all process
-                                        types that are normally sandboxed.
-  --output-dir <path>                   path to the directory for output files.
-  --port <port>                         port to listen on for SSE transport.
-  --proxy-bypass <bypass>               comma-separated domains to bypass proxy,
-                                        for example
-                                        ".com,chromium.org,.domain.com"
-  --proxy-server <proxy>                specify proxy server, for example
-                                        "http://myproxy:3128" or
-                                        "socks5://myproxy:8080"
-  --save-session                        Whether to save the Playwright MCP
-                                        session into the output directory.
-  --save-trace                          Whether to save the Playwright Trace of
-                                        the session into the output directory.
-  --save-video <size>                   Whether to save the video of the session
-                                        into the output directory. For example
-                                        "--save-video=800x600"
-  --secrets <path>                      path to a file containing secrets in the
-                                        dotenv format
-  --shared-browser-context              reuse the same browser context between
-                                        all connected HTTP clients.
-  --storage-state <path>                path to the storage state file for
-                                        isolated sessions.
-  --test-id-attribute <attribute>       specify the attribute to use for test
-                                        ids, defaults to "data-testid"
-  --timeout-action <timeout>            specify action timeout in milliseconds,
-                                        defaults to 5000ms
-  --timeout-navigation <timeout>        specify navigation timeout in
-                                        milliseconds, defaults to 60000ms
-  --user-agent <ua string>              specify user agent string
-  --user-data-dir <path>                path to the user data directory. If not
-                                        specified, a temporary directory will be
-                                        created.
-  --viewport-size <size>                specify browser viewport size in pixels,
-                                        for example "1280x720"
+**Terminal 2: Build extension**
+```bash
+cd extension
+npm run build
+# or for watch mode:
+npm run dev
 ```
 
-<!--- End of options generated section -->
+**Chrome: Load unpacked extension**
+1. Open `chrome://extensions/`
+2. Enable "Developer mode"
+3. Click "Load unpacked"
+4. Select the `extension/dist` folder
 
-### User profile
+### Project Structure
 
-You can run Playwright MCP with persistent profile like a regular browser (default), in isolated contexts for testing sessions, or connect to your existing browser using the browser extension.
+```
+chrome-mcp/
+├── cli.js                      # MCP server entry point
+├── src/
+│   ├── statefulBackend.js      # Connection state management
+│   ├── unifiedBackend.js       # MCP tool implementations
+│   ├── extensionServer.js      # WebSocket server for extension
+│   ├── mcpConnection.js        # Proxy/relay connection handling
+│   ├── transport.js            # Transport abstraction layer
+│   └── oauth.js                # OAuth2 client for PRO features
+├── extension/
+│   └── src/
+│       ├── background.ts       # Extension service worker
+│       ├── relayConnection.ts  # WebSocket client
+│       └── utils/              # Utility functions
+└── tests/                      # Test suites
+```
 
-**Persistent profile**
-
-All the logged in information will be stored in the persistent profile, you can delete it between sessions if you'd like to clear the offline state.
-Persistent profile is located at the following locations and you can override it with the `--user-data-dir` argument.
+### Testing
 
 ```bash
-# Windows
-%USERPROFILE%\AppData\Local\ms-playwright\mcp-{channel}-profile
+# Run tests
+npm test
 
-# macOS
-- ~/Library/Caches/ms-playwright/mcp-{channel}-profile
-
-# Linux
-- ~/.cache/ms-playwright/mcp-{channel}-profile
+# Run with coverage
+npm run test:coverage
 ```
 
-**Isolated**
+## Configuration
 
-In the isolated mode, each session is started in the isolated profile. Every time you ask MCP to close the browser,
-the session is closed and all the storage state for this session is lost. You can provide initial storage state
-to the browser via the config's `contextOptions` or via the `--storage-state` argument. Learn more about the storage
-state [here](https://playwright.dev/docs/auth).
+The server works out-of-the-box with sensible defaults. For advanced configuration:
 
-```js
-{
-  "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": [
-        "@playwright/mcp@latest",
-        "--isolated",
-        "--storage-state={path/to/storage.json}"
-      ]
-    }
-  }
-}
-```
+### Environment Variables
 
-**Browser Extension**
-
-The Playwright MCP Chrome Extension allows you to connect to existing browser tabs and leverage your logged-in sessions and browser state. See [extension/README.md](extension/README.md) for installation and setup instructions.
-
-### Configuration file
-
-The Playwright MCP server can be configured using a JSON configuration file. You can specify the configuration file
-using the `--config` command line option:
+Create a `.env` file in the project root:
 
 ```bash
-npx @playwright/mcp@latest --config path/to/config.json
+# Authentication server (PRO features)
+AUTH_BASE_URL=https://mcp-for-chrome.railsblueprint.com
+
+# Local WebSocket port (Free tier)
+MCP_PORT=5555
+
+# Debug mode
+DEBUG=false
 ```
 
-<details>
-<summary>Configuration file schema</summary>
-
-```typescript
-{
-  // Browser configuration
-  browser?: {
-    // Browser type to use (chromium, firefox, or webkit)
-    browserName?: 'chromium' | 'firefox' | 'webkit';
-
-    // Keep the browser profile in memory, do not save it to disk.
-    isolated?: boolean;
-
-    // Path to user data directory for browser profile persistence
-    userDataDir?: string;
-
-    // Browser launch options (see Playwright docs)
-    // @see https://playwright.dev/docs/api/class-browsertype#browser-type-launch
-    launchOptions?: {
-      channel?: string;        // Browser channel (e.g. 'chrome')
-      headless?: boolean;      // Run in headless mode
-      executablePath?: string; // Path to browser executable
-      // ... other Playwright launch options
-    };
-
-    // Browser context options
-    // @see https://playwright.dev/docs/api/class-browser#browser-new-context
-    contextOptions?: {
-      viewport?: { width: number, height: number };
-      // ... other Playwright context options
-    };
-
-    // CDP endpoint for connecting to existing browser
-    cdpEndpoint?: string;
-
-    // Remote Playwright server endpoint
-    remoteEndpoint?: string;
-  },
-
-  // Server configuration
-  server?: {
-    port?: number;  // Port to listen on
-    host?: string;  // Host to bind to (default: localhost)
-  },
-
-  // List of additional capabilities
-  capabilities?: Array<
-    'tabs' |    // Tab management
-    'install' | // Browser installation
-    'pdf' |     // PDF generation
-    'vision' |  // Coordinate-based interactions
-  >;
-
-  // Directory for output files
-  outputDir?: string;
-
-  // Network configuration
-  network?: {
-    // List of origins to allow the browser to request. Default is to allow all. Origins matching both `allowedOrigins` and `blockedOrigins` will be blocked.
-    allowedOrigins?: string[];
-
-    // List of origins to block the browser to request. Origins matching both `allowedOrigins` and `blockedOrigins` will be blocked.
-    blockedOrigins?: string[];
-  };
- 
-  /**
-   * Whether to send image responses to the client. Can be "allow" or "omit". 
-   * Defaults to "allow".
-   */
-  imageResponses?: 'allow' | 'omit';
-}
-```
-</details>
-
-### Standalone MCP server
-
-When running headed browser on system w/o display or from worker processes of the IDEs,
-run the MCP server from environment with the DISPLAY and pass the `--port` flag to enable HTTP transport.
+### Command Line Options
 
 ```bash
-npx @playwright/mcp@latest --port 8931
+chrome-mcp --debug          # Enable verbose logging
 ```
 
-And then in MCP client config, set the `url` to the HTTP endpoint:
+## Troubleshooting
 
-```js
-{
-  "mcpServers": {
-    "playwright": {
-      "url": "http://localhost:8931/mcp"
-    }
-  }
-}
+### Extension won't connect
+1. Check the extension is installed and enabled
+2. Click the extension icon - it should show "Connected"
+3. Check the MCP server is running (look for process on port 5555)
+4. Try reloading the extension
+
+### "Port 5555 already in use"
+Another instance is running. Find and kill it:
+```bash
+lsof -ti:5555 | xargs kill -9
 ```
 
-<details>
-<summary><b>Docker</b></summary>
-
-**NOTE:** The Docker implementation only supports headless chromium at the moment.
-
-```js
-{
-  "mcpServers": {
-    "playwright": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "--init", "--pull=always", "mcr.microsoft.com/playwright/mcp"]
-    }
-  }
-}
-```
-
-Or If you prefer to run the container as a long-lived service instead of letting the MCP client spawn it, use:
-
-```
-docker run -d -i --rm --init --pull=always \
-  --entrypoint node \
-  --name playwright \
-  -p 8931:8931 \
-  mcr.microsoft.com/playwright/mcp \
-  cli.js --headless --browser chromium --no-sandbox --port 8931
-```
-
-The server will listen on host port **8931** and can be reached by any MCP client.  
-
-You can build the Docker image yourself.
-
-```
-docker build -t mcr.microsoft.com/playwright/mcp .
-```
-</details>
-
-<details>
-<summary><b>Programmatic usage</b></summary>
-
-```js
-import http from 'http';
-
-import { createConnection } from '@playwright/mcp';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-
-http.createServer(async (req, res) => {
-  // ...
-
-  // Creates a headless Playwright MCP server with SSE transport
-  const connection = await createConnection({ browser: { launchOptions: { headless: true } } });
-  const transport = new SSEServerTransport('/messages', res);
-  await connection.connect(transport);
-
-  // ...
-});
-```
-</details>
-
-### Tools
-
-<!--- Tools generated by update-readme.js -->
-
-<details>
-<summary><b>Core automation</b></summary>
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_click**
-  - Title: Click
-  - Description: Perform click on a web page
-  - Parameters:
-    - `element` (string): Human-readable element description used to obtain permission to interact with the element
-    - `ref` (string): Exact target element reference from the page snapshot
-    - `doubleClick` (boolean, optional): Whether to perform a double click instead of a single click
-    - `button` (string, optional): Button to click, defaults to left
-    - `modifiers` (array, optional): Modifier keys to press
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_close**
-  - Title: Close browser
-  - Description: Close the page
-  - Parameters: None
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_console_messages**
-  - Title: Get console messages
-  - Description: Returns all console messages
-  - Parameters:
-    - `onlyErrors` (boolean, optional): Only return error messages
-  - Read-only: **true**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_drag**
-  - Title: Drag mouse
-  - Description: Perform drag and drop between two elements
-  - Parameters:
-    - `startElement` (string): Human-readable source element description used to obtain the permission to interact with the element
-    - `startRef` (string): Exact source element reference from the page snapshot
-    - `endElement` (string): Human-readable target element description used to obtain the permission to interact with the element
-    - `endRef` (string): Exact target element reference from the page snapshot
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_evaluate**
-  - Title: Evaluate JavaScript
-  - Description: Evaluate JavaScript expression on page or element
-  - Parameters:
-    - `function` (string): () => { /* code */ } or (element) => { /* code */ } when element is provided
-    - `element` (string, optional): Human-readable element description used to obtain permission to interact with the element
-    - `ref` (string, optional): Exact target element reference from the page snapshot
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_file_upload**
-  - Title: Upload files
-  - Description: Upload one or multiple files
-  - Parameters:
-    - `paths` (array, optional): The absolute paths to the files to upload. Can be single file or multiple files. If omitted, file chooser is cancelled.
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_fill_form**
-  - Title: Fill form
-  - Description: Fill multiple form fields
-  - Parameters:
-    - `fields` (array): Fields to fill in
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_handle_dialog**
-  - Title: Handle a dialog
-  - Description: Handle a dialog
-  - Parameters:
-    - `accept` (boolean): Whether to accept the dialog.
-    - `promptText` (string, optional): The text of the prompt in case of a prompt dialog.
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_hover**
-  - Title: Hover mouse
-  - Description: Hover over element on page
-  - Parameters:
-    - `element` (string): Human-readable element description used to obtain permission to interact with the element
-    - `ref` (string): Exact target element reference from the page snapshot
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_navigate**
-  - Title: Navigate to a URL
-  - Description: Navigate to a URL
-  - Parameters:
-    - `url` (string): The URL to navigate to
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_navigate_back**
-  - Title: Go back
-  - Description: Go back to the previous page
-  - Parameters: None
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_network_requests**
-  - Title: List network requests
-  - Description: Returns all network requests since loading the page
-  - Parameters: None
-  - Read-only: **true**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_press_key**
-  - Title: Press a key
-  - Description: Press a key on the keyboard
-  - Parameters:
-    - `key` (string): Name of the key to press or a character to generate, such as `ArrowLeft` or `a`
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_resize**
-  - Title: Resize browser window
-  - Description: Resize the browser window
-  - Parameters:
-    - `width` (number): Width of the browser window
-    - `height` (number): Height of the browser window
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_select_option**
-  - Title: Select option
-  - Description: Select an option in a dropdown
-  - Parameters:
-    - `element` (string): Human-readable element description used to obtain permission to interact with the element
-    - `ref` (string): Exact target element reference from the page snapshot
-    - `values` (array): Array of values to select in the dropdown. This can be a single value or multiple values.
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_snapshot**
-  - Title: Page snapshot
-  - Description: Capture accessibility snapshot of the current page, this is better than screenshot
-  - Parameters: None
-  - Read-only: **true**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_take_screenshot**
-  - Title: Take a screenshot
-  - Description: Take a screenshot of the current page. You can't perform actions based on the screenshot, use browser_snapshot for actions.
-  - Parameters:
-    - `type` (string, optional): Image format for the screenshot. Default is png.
-    - `filename` (string, optional): File name to save the screenshot to. Defaults to `page-{timestamp}.{png|jpeg}` if not specified. Prefer relative file names to stay within the output directory.
-    - `element` (string, optional): Human-readable element description used to obtain permission to screenshot the element. If not provided, the screenshot will be taken of viewport. If element is provided, ref must be provided too.
-    - `ref` (string, optional): Exact target element reference from the page snapshot. If not provided, the screenshot will be taken of viewport. If ref is provided, element must be provided too.
-    - `fullPage` (boolean, optional): When true, takes a screenshot of the full scrollable page, instead of the currently visible viewport. Cannot be used with element screenshots.
-  - Read-only: **true**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_type**
-  - Title: Type text
-  - Description: Type text into editable element
-  - Parameters:
-    - `element` (string): Human-readable element description used to obtain permission to interact with the element
-    - `ref` (string): Exact target element reference from the page snapshot
-    - `text` (string): Text to type into the element
-    - `submit` (boolean, optional): Whether to submit entered text (press Enter after)
-    - `slowly` (boolean, optional): Whether to type one character at a time. Useful for triggering key handlers in the page. By default entire text is filled in at once.
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_wait_for**
-  - Title: Wait for
-  - Description: Wait for text to appear or disappear or a specified time to pass
-  - Parameters:
-    - `time` (number, optional): The time to wait in seconds
-    - `text` (string, optional): The text to wait for
-    - `textGone` (string, optional): The text to wait for to disappear
-  - Read-only: **false**
-
-</details>
-
-<details>
-<summary><b>Tab management</b></summary>
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_tabs**
-  - Title: Manage tabs
-  - Description: List, create, close, or select a browser tab.
-  - Parameters:
-    - `action` (string): Operation to perform
-    - `index` (number, optional): Tab index, used for close/select. If omitted for close, current tab is closed.
-  - Read-only: **false**
-
-</details>
-
-<details>
-<summary><b>Browser installation</b></summary>
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_install**
-  - Title: Install the browser specified in the config
-  - Description: Install the browser specified in the config. Call this if you get an error about the browser not being installed.
-  - Parameters: None
-  - Read-only: **false**
-
-</details>
-
-<details>
-<summary><b>Coordinate-based (opt-in via --caps=vision)</b></summary>
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_mouse_click_xy**
-  - Title: Click
-  - Description: Click left mouse button at a given position
-  - Parameters:
-    - `element` (string): Human-readable element description used to obtain permission to interact with the element
-    - `x` (number): X coordinate
-    - `y` (number): Y coordinate
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_mouse_drag_xy**
-  - Title: Drag mouse
-  - Description: Drag left mouse button to a given position
-  - Parameters:
-    - `element` (string): Human-readable element description used to obtain permission to interact with the element
-    - `startX` (number): Start X coordinate
-    - `startY` (number): Start Y coordinate
-    - `endX` (number): End X coordinate
-    - `endY` (number): End Y coordinate
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_mouse_move_xy**
-  - Title: Move mouse
-  - Description: Move mouse to a given position
-  - Parameters:
-    - `element` (string): Human-readable element description used to obtain permission to interact with the element
-    - `x` (number): X coordinate
-    - `y` (number): Y coordinate
-  - Read-only: **false**
-
-</details>
-
-<details>
-<summary><b>PDF generation (opt-in via --caps=pdf)</b></summary>
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_pdf_save**
-  - Title: Save as PDF
-  - Description: Save page as PDF
-  - Parameters:
-    - `filename` (string, optional): File name to save the pdf to. Defaults to `page-{timestamp}.pdf` if not specified. Prefer relative file names to stay within the output directory.
-  - Read-only: **true**
-
-</details>
-
-<details>
-<summary><b>Test assertions (opt-in via --caps=testing)</b></summary>
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_generate_locator**
-  - Title: Create locator for element
-  - Description: Generate locator for the given element to use in tests
-  - Parameters:
-    - `element` (string): Human-readable element description used to obtain permission to interact with the element
-    - `ref` (string): Exact target element reference from the page snapshot
-  - Read-only: **true**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_verify_element_visible**
-  - Title: Verify element visible
-  - Description: Verify element is visible on the page
-  - Parameters:
-    - `role` (string): ROLE of the element. Can be found in the snapshot like this: `- {ROLE} "Accessible Name":`
-    - `accessibleName` (string): ACCESSIBLE_NAME of the element. Can be found in the snapshot like this: `- role "{ACCESSIBLE_NAME}"`
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_verify_list_visible**
-  - Title: Verify list visible
-  - Description: Verify list is visible on the page
-  - Parameters:
-    - `element` (string): Human-readable list description
-    - `ref` (string): Exact target element reference that points to the list
-    - `items` (array): Items to verify
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_verify_text_visible**
-  - Title: Verify text visible
-  - Description: Verify text is visible on the page. Prefer browser_verify_element_visible if possible.
-  - Parameters:
-    - `text` (string): TEXT to verify. Can be found in the snapshot like this: `- role "Accessible Name": {TEXT}` or like this: `- text: {TEXT}`
-  - Read-only: **false**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_verify_value**
-  - Title: Verify value
-  - Description: Verify element value
-  - Parameters:
-    - `type` (string): Type of the element
-    - `element` (string): Human-readable element description
-    - `ref` (string): Exact target element reference that points to the element
-    - `value` (string): Value to verify. For checkbox, use "true" or "false".
-  - Read-only: **false**
-
-</details>
-
-<details>
-<summary><b>Tracing (opt-in via --caps=tracing)</b></summary>
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_start_tracing**
-  - Title: Start tracing
-  - Description: Start trace recording
-  - Parameters: None
-  - Read-only: **true**
-
-<!-- NOTE: This has been generated via update-readme.js -->
-
-- **browser_stop_tracing**
-  - Title: Stop tracing
-  - Description: Stop trace recording
-  - Parameters: None
-  - Read-only: **true**
-
-</details>
-
-
-<!--- End of tools generated section -->
+### Browser tools not working
+1. Make sure you've called `enable` first
+2. Check you've attached to a tab with `browser_tabs`
+3. Verify the tab still exists (wasn't closed)
+
+### Getting help
+- [GitHub Issues](https://github.com/railsblueprint/chrome-mcp/issues)
+- [Documentation](https://mcp-for-chrome.railsblueprint.com/docs)
+
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Security
+
+This tool gives AI assistants control over your browser. Please review:
+- The MCP server only accepts local connections by default (localhost:5555)
+- PRO relay connections are authenticated via OAuth
+- The extension requires explicit user action to connect
+- All browser actions go through Chrome's permission system
+
+Found a security issue? Please email security@railsblueprint.com instead of filing a public issue.
+
+## Credits
+
+This project was originally inspired by Microsoft's Playwright MCP implementation but has been completely rewritten to use Chrome extension-based automation instead of Playwright. The architecture, implementation, and approach are fundamentally different.
+
+**Key differences:**
+- Uses Chrome DevTools Protocol via extension (not Playwright)
+- Works with real browser profiles (not isolated contexts)
+- WebSocket-based communication (not CDP relay)
+- Cloud relay option for remote access
+- Free and PRO tier model
+
+We're grateful to the Playwright team for pioneering browser automation via MCP.
+
+## License
+
+Apache License 2.0 - see [LICENSE](LICENSE)
+
+Copyright (c) 2024 Rails Blueprint
+
+---
+
+**Built with ❤️ by [Rails Blueprint](https://railsblueprint.com)**
+
+[Website](https://mcp-for-chrome.railsblueprint.com) •
+[GitHub](https://github.com/railsblueprint/chrome-mcp) •
+[NPM](https://www.npmjs.com/package/@railsblueprint/chrome-mcp)

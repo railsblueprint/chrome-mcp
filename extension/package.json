@@ -5,9 +5,9 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/microsoft/playwright-mcp.git"
+    "url": "git+https://github.com/railsblueprint/chrome-mcp.git"
   },
-  "homepage": "https://playwright.dev",
+  "homepage": "https://mcp-for-chrome.railsblueprint.com",
   "engines": {
     "node": ">=18"
   },
