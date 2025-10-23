@@ -341,6 +341,29 @@ class StatefulBackend {
         // Keep the same state and backend since the server connection is still valid
       };
 
+      // Monitor tab info updates (keep _attachedTab in sync with actual browser state)
+      this._extensionServer.onTabInfoUpdate = (tabInfo) => {
+        debugLog('[StatefulBackend] Tab info update:', tabInfo);
+
+        // If tabInfo is null, clear the attached tab (tab was closed/detached)
+        if (tabInfo === null) {
+          debugLog('[StatefulBackend] Tab detached, clearing cached state');
+          this._attachedTab = null;
+          return;
+        }
+
+        // Update cached tab info with fresh data from browser
+        if (this._attachedTab && this._attachedTab.id === tabInfo.id) {
+          this._attachedTab = {
+            ...this._attachedTab,
+            title: tabInfo.title,
+            url: tabInfo.url,
+            index: tabInfo.index
+          };
+          debugLog('[StatefulBackend] Updated cached tab info:', this._attachedTab);
+        }
+      };
+
       // Create transport using the extension server
       const transport = new DirectTransport(this._extensionServer);
 

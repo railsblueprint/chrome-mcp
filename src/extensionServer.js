@@ -23,6 +23,7 @@ class ExtensionServer {
     this._extensionWs = null; // Current extension WebSocket connection
     this._pendingRequests = new Map(); // requestId -> {resolve, reject}
     this.onReconnect = null; // Callback when extension reconnects (replaces old connection)
+    this.onTabInfoUpdate = null; // Callback when tab info changes (for status header updates)
   }
 
   /**
@@ -106,6 +107,14 @@ class ExtensionServer {
         const pending = this._pendingRequests.get(message.id);
         if (pending) {
           this._pendingRequests.delete(message.id);
+
+          // Extract current tab info from result (not from message itself - that would be non-standard JSON-RPC)
+          // Use 'in' operator to detect null values (tab detached) vs missing property
+          const result = message.result || {};
+          if ('currentTab' in result && this.onTabInfoUpdate) {
+            debugLog('Tab info update:', result.currentTab);
+            this.onTabInfoUpdate(result.currentTab);
+          }
 
           if (message.error) {
             pending.reject(new Error(message.error.message || JSON.stringify(message.error)));
