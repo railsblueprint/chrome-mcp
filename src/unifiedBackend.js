@@ -688,7 +688,7 @@ class UnifiedBackend {
       return {
         content: [{
           type: 'text',
-          text: `### Tab Created and Attached\n\nURL: ${args.url || 'about:blank'}\nTab ID: ${result.tab?.id}\nTab Index: ${tabIndex}\n\n**This tab is now attached.** All browser commands will execute on this tab.\n\n**Note:** The tab was inserted at index ${tabIndex} (not necessarily at the end of the list).`
+          text: `### Tab Created and Attached\n\nURL: ${args.url || 'about:blank'}\nTab ID: ${result.tab?.id}\nTab Index: ${tabIndex}\n\n**This tab is now attached.** All browser commands will execute on this tab.\n\n**Note:** The tab was inserted at index ${tabIndex} (not necessarily at the end of the list).\n\n**Next Steps:**\n- \`browser_take_screenshot\` - Capture visual appearance of the page\n- \`browser_snapshot\` - Get accessibility tree structure for interactions\n- \`browser_extract_content\` - Extract page content as clean markdown`
         }],
         isError: false
       };
@@ -713,7 +713,7 @@ class UnifiedBackend {
       return {
         content: [{
           type: 'text',
-          text: `### ✅ Tab Attached\n\n**Index:** ${args.index}\n**Title:** ${result.tab?.title}\n**URL:** ${result.tab?.url || 'N/A'}`
+          text: `### ✅ Tab Attached\n\n**Index:** ${args.index}\n**Title:** ${result.tab?.title}\n**URL:** ${result.tab?.url || 'N/A'}\n\n**Next Steps:**\n- \`browser_take_screenshot\` - Capture visual appearance of the page\n- \`browser_snapshot\` - Get accessibility tree structure for interactions\n- \`browser_extract_content\` - Extract page content as clean markdown`
         }],
         isError: false
       };
