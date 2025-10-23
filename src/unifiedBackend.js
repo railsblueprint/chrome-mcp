@@ -915,7 +915,15 @@ class UnifiedBackend {
     const hasTextMatch = selector.match(/:has-text\(["']([^"']+)["']\)/);
     if (hasTextMatch) {
       const searchText = hasTextMatch[1];
-      const baseSelectorPart = selector.substring(0, hasTextMatch.index);
+      let baseSelectorPart = selector.substring(0, hasTextMatch.index);
+
+      // Expand 'button' in the base selector before creating has-text object
+      if (baseSelectorPart === 'button') {
+        baseSelectorPart = 'button, input[type="button"], input[type="submit"], a.btn, a[role="button"]';
+      } else if (baseSelectorPart.startsWith('button.') || baseSelectorPart.startsWith('button#') || baseSelectorPart.startsWith('button[')) {
+        const rest = baseSelectorPart.substring(6); // Remove 'button'
+        baseSelectorPart = `button${rest}, input[type="button"]${rest}, input[type="submit"]${rest}`;
+      }
 
       // Return special marker that will be handled in element finding
       return {
