@@ -124,6 +124,23 @@ export class RelayConnection {
     this._tabPromiseResolve();
   }
 
+  // Detach from current tab without closing WebSocket connection
+  async detachTab(): Promise<void> {
+    const tabId = this._debuggee.tabId;
+    if (tabId) {
+      debugLog(`Detaching from tab ${tabId} but keeping connection alive`);
+      try {
+        await chrome.debugger.detach({ tabId });
+        debugLog(`Successfully detached debugger from tab ${tabId}`);
+      } catch (error) {
+        debugLog(`Error detaching debugger from tab ${tabId}:`, error);
+      }
+    }
+    this._debuggee = { };
+    this._mainContextId = null;
+    this.clearTracking();
+  }
+
   close(message: string): void {
     this._ws.close(1000, message);
     // ws.onclose is called asynchronously, so we call it here to avoid forwarding
@@ -327,14 +344,15 @@ export class RelayConnection {
 
     const tabId = source.tabId;
     if (!tabId) {
-      this.close(`Debugger detached: ${reason}`);
+      // No tabId means debugger was never properly attached, just clear state
+      console.error(`[Extension] Debugger detached without tabId, reason: ${reason}`);
       this._debuggee = { };
       return;
     }
 
     console.error(`[Extension] Debugger detached from tab ${tabId}, reason: ${reason}`);
 
-    // Check if tab still exists before closing connection
+    // Check if tab still exists before deciding what to do
     try {
       const tab = await chrome.tabs.get(tabId);
       if (tab) {
@@ -343,8 +361,7 @@ export class RelayConnection {
         // Check if tab URL is automatable before reattaching
         const isAutomatable = tab.url && !['chrome:', 'edge:', 'devtools:', 'chrome-extension:'].some(scheme => tab.url!.startsWith(scheme));
         if (!isAutomatable) {
-          console.error(`[Extension] Tab ${tabId} has non-automatable URL (${tab.url}), cannot reattach`);
-          this.close(`Debugger detached: tab navigated to non-automatable URL: ${tab.url}`);
+          console.error(`[Extension] Tab ${tabId} has non-automatable URL (${tab.url}), cannot reattach. Clearing tab attachment but keeping connection alive.`);
           this._debuggee = { };
           return;
         }
@@ -406,18 +423,21 @@ export class RelayConnection {
           }
 
           console.error(`[Extension] Successfully reattached debugger to tab ${tabId}`);
-          return; // Don't close the connection even if tracking failed
+          return; // Successfully reattached
         } catch (reattachError: any) {
           console.error(`[Extension] Failed to reattach debugger:`, reattachError);
-          // Fall through to close connection
+          // Fall through to handle as tab lost
         }
       }
     } catch (error) {
-      // Tab doesn't exist, proceed with closing
+      // Tab doesn't exist
       console.error(`[Extension] Tab ${tabId} no longer exists`);
     }
 
-    this.close(`Debugger detached: ${reason}`);
+    // Tab no longer exists or couldn't reattach
+    // DON'T close WebSocket connection - just clear the tab attachment
+    // Extension should remain connected and operational for tab management commands
+    console.error(`[Extension] Clearing tab attachment but keeping connection alive`);
     this._debuggee = { };
   }
 
@@ -505,21 +525,30 @@ export class RelayConnection {
       // Ensure result is always set, even if undefined (for JSON-RPC compliance)
       response.result = result !== undefined ? result : {};
 
-      // Add current tab info to every response so MCP can update its cached state
+      console.error(`[RelayConnection] About to add currentTab, debuggee.tabId=${this._debuggee.tabId}`);
+
+      // Add current tab info to result (not to response itself - that would be non-standard JSON-RPC)
+      // Always include currentTab (null if no tab attached) so MCP knows to clear stale state
       if (this._debuggee.tabId) {
         try {
           const tab = await chrome.tabs.get(this._debuggee.tabId);
-          (response as any).currentTab = {
+          response.result.currentTab = {
             id: tab.id,
             title: tab.title,
             url: tab.url,
             index: tab.index
           };
-          debugLog('Added current tab info to response:', tab.url);
+          debugLog('Added current tab info to result:', tab.url);
         } catch (error: any) {
           debugLog('Failed to get current tab info:', error);
-          // Don't fail the whole response if tab info can't be retrieved
+          // Tab might have been closed, set to null
+          response.result.currentTab = null;
+          console.error(`[RelayConnection] Set currentTab to null due to error getting tab`);
         }
+      } else {
+        // No tab attached - explicitly set to null so MCP clears its cached state
+        response.result.currentTab = null;
+        debugLog('No tab attached, set currentTab to null');
       }
     } catch (error: any) {
       debugLog('Error handling command:', message.method, error);
@@ -531,6 +560,7 @@ export class RelayConnection {
     }
 
     try {
+      console.error(`[RelayConnection] About to send response, result.currentTab: ${response.result?.currentTab}`);
       debugLog('Sending response:', JSON.stringify(response).substring(0, 200));
       this._sendMessage(response);
       debugLog('Response sent successfully');

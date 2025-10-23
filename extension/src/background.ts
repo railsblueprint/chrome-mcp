@@ -366,14 +366,18 @@ class TabShareExtension {
     const pendingConnection = this._pendingTabSelection.get(tabId)?.connection;
     if (pendingConnection) {
       this._pendingTabSelection.delete(tabId);
-      pendingConnection.close('Browser tab closed');
+      // Detach from tab but keep connection alive for tab management commands
+      await pendingConnection.detachTab();
       return;
     }
     if (this._connectedTabId !== tabId)
       return;
-    this._activeConnection?.close('Browser tab closed');
-    this._activeConnection = undefined;
+
+    // Tab was closed - detach from it but keep connection alive
+    console.log(`[Background] Tab ${tabId} was closed, detaching but keeping connection alive`);
+    await this._activeConnection?.detachTab();
     this._connectedTabId = null;
+    // Don't set _activeConnection to undefined - keep it alive for tab management
   }
 
   private _onTabActivated(activeInfo: chrome.tabs.TabActiveInfo) {

@@ -95,13 +95,17 @@ class UnifiedBackend {
   _addStatusHeader(response) {
     // Add status header to all browser tool responses
     if (this._statefulBackend && response && response.content) {
+      // DEBUG: Show what _attachedTab is
+      const attachedTab = this._statefulBackend._attachedTab;
+      const debugInfo = `\n🐛 DEBUG: _attachedTab = ${JSON.stringify(attachedTab)}\n`;
+
       // Find the first text content item and prepend status header with response status
       const textContent = response.content.find(c => c && c.type === 'text');
       if (textContent && textContent.text) {
         const statusEmoji = response.isError ? '❌' : '✅';
         const statusText = response.isError ? 'Error' : 'Success';
         const header = this._statefulBackend._getStatusHeader().replace('\n---\n\n', ` | ${statusEmoji} ${statusText}\n---\n\n`);
-        textContent.text = header + textContent.text;
+        textContent.text = header + debugInfo + textContent.text;
       }
     }
     return response;
@@ -542,15 +546,15 @@ class UnifiedBackend {
     } catch (error) {
       debugLog(`Error in ${name}:`, error);
 
-      // Detect browser disconnection
+      // Detect no tab attached error (different from extension disconnected)
       const errorMsg = error.message || String(error);
       if (errorMsg.includes('No active connection')) {
-        debugLog('Browser disconnection detected in error handler');
+        debugLog('No tab attached - connection to tab lost');
 
         const errorResponse = {
           content: [{
             type: 'text',
-            text: `### Browser Extension Disconnected\n\nThe browser extension has disconnected from the proxy (likely due to extension reload).\n\nCheck the status above - it should now show "⚠️ Browser Disconnected".\n\n**The extension will auto-reconnect** within a few seconds. Once reconnected:\n1. Try your command again\n2. You'll automatically reconnect to the same browser\n3. Then attach to a tab if needed\n\n**Note:** Your proxy connection is still active - no need to call \`disable\` or \`enable\` again!`
+            text: `### No Tab Attached\n\nThe browser tab connection was lost (tab was closed or detached).\n\n**To continue:**\n1. Call \`browser_tabs action='list'\` to see available tabs\n2. Call \`browser_tabs action='attach' index=N\` to attach to a tab\n3. Or call \`browser_tabs action='new' url='https://...'\` to create a new tab\n\n**Note:** The browser extension is still connected - only the tab attachment was lost.`
           }],
           isError: true
         };
@@ -1813,10 +1817,17 @@ class UnifiedBackend {
   async _handleEvaluate(args) {
     const expression = args.function || args.expression;
 
+    // If expression looks like a function definition, wrap and call it
+    // Match: () => ..., function() {...}, async () => ..., etc.
+    const isFunctionExpression = /^\s*(async\s+)?\([^)]*\)\s*=>|^\s*function\s*\(/.test(expression);
+    const finalExpression = (args.function || isFunctionExpression)
+      ? `(${expression})()`
+      : expression;
+
     const result = await this._transport.sendCommand('forwardCDPCommand', {
       method: 'Runtime.evaluate',
       params: {
-        expression: args.function ? `(${expression})()` : expression,
+        expression: finalExpression,
         returnByValue: true,
         awaitPromise: true
       }

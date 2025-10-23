@@ -463,7 +463,16 @@ class StatefulBackend {
 
         // Monitor tab info updates (keep _attachedTab in sync with actual browser state)
         mcpConnection.onTabInfoUpdate = (tabInfo) => {
-          debugLog('[StatefulBackend] Tab info update:', tabInfo);
+          console.error('[StatefulBackend] Tab info update callback called with:', tabInfo);
+          console.error('[StatefulBackend] Current _attachedTab before update:', this._attachedTab);
+
+          // If tabInfo is null, clear the attached tab (tab was closed/detached)
+          if (tabInfo === null) {
+            console.error('[StatefulBackend] Tab detached, clearing cached state');
+            this._attachedTab = null;
+            console.error('[StatefulBackend] _attachedTab after clearing:', this._attachedTab);
+            return;
+          }
 
           // Update cached tab info with fresh data from browser
           if (this._attachedTab && this._attachedTab.id === tabInfo.id) {
@@ -473,7 +482,7 @@ class StatefulBackend {
               url: tabInfo.url,
               index: tabInfo.index
             };
-            debugLog('[StatefulBackend] Updated cached tab info:', this._attachedTab);
+            console.error('[StatefulBackend] Updated cached tab info:', this._attachedTab);
           }
         };
 
@@ -768,6 +777,13 @@ class StatefulBackend {
       // Monitor tab info updates (keep _attachedTab in sync with actual browser state)
       mcpConnection.onTabInfoUpdate = (tabInfo) => {
         debugLog('[StatefulBackend] Tab info update:', tabInfo);
+
+        // If tabInfo is null, clear the attached tab (tab was closed/detached)
+        if (tabInfo === null) {
+          debugLog('[StatefulBackend] Tab detached, clearing cached state');
+          this._attachedTab = null;
+          return;
+        }
 
         // Update cached tab info with fresh data from browser
         if (this._attachedTab && this._attachedTab.id === tabInfo.id) {

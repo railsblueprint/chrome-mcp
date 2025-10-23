@@ -208,10 +208,20 @@ class MCPConnection {
     clearTimeout(pending.timeoutId);
     this._pendingRequests.delete(requestId);
 
-    // Extract current tab info if present and notify callback
-    if (message.currentTab && this.onTabInfoUpdate) {
-      debugLog('Tab info update:', message.currentTab);
-      this.onTabInfoUpdate(message.currentTab);
+    // Extract current tab info from result (not from message itself - that would be non-standard JSON-RPC)
+    // Use 'in' operator to detect null values (tab detached) vs missing property
+    const result = message.result || {};
+    console.error('[MCPConnection] Result keys:', Object.keys(result));
+    console.error('[MCPConnection] Checking for currentTab in result:', 'currentTab' in result);
+    console.error('[MCPConnection] this.onTabInfoUpdate exists:', !!this.onTabInfoUpdate);
+    console.error('[MCPConnection] currentTab value:', result.currentTab);
+
+    if ('currentTab' in result && this.onTabInfoUpdate) {
+      console.error('[MCPConnection] Calling onTabInfoUpdate with:', result.currentTab);
+      this.onTabInfoUpdate(result.currentTab);
+      console.error('[MCPConnection] onTabInfoUpdate callback completed');
+    } else {
+      console.error('[MCPConnection] NOT calling onTabInfoUpdate - condition failed');
     }
 
     if (message.error) {
