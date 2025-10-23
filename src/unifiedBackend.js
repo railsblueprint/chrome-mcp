@@ -343,8 +343,25 @@ class UnifiedBackend {
       // Network
       {
         name: 'browser_network_requests',
-        description: 'Get network request log',
-        inputSchema: { type: 'object', properties: {} }
+        description: 'Powerful network monitoring and replay tool with multiple actions: list (lightweight overview), details (full request/response with headers/bodies), replay (re-execute request), clear (free memory). Supports JSONPath filtering for large JSON responses.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['list', 'details', 'replay', 'clear'],
+              description: 'Action to perform: list (default, shows all requests), details (get full data for specific request), replay (re-execute request), clear (clear history)'
+            },
+            requestId: {
+              type: 'string',
+              description: 'Request ID from list view (required for details/replay actions). Format: "12345.67"'
+            },
+            jsonPath: {
+              type: 'string',
+              description: 'JSONPath query to filter large JSON responses (optional, for details action). Examples: "$.data.items[0]", "$..name", "$.items[?(@.price < 100)]"'
+            }
+          }
+        }
       },
 
       // PDF
