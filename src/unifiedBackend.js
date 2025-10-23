@@ -812,12 +812,138 @@ class UnifiedBackend {
   }
 
   /**
+   * Find element and return its coordinates
+   * Handles both regular CSS selectors and :has-text() pseudo-selectors
+   */
+  async _findElement(selectorOrObj) {
+    // Handle :has-text() selector
+    if (typeof selectorOrObj === 'object' && selectorOrObj.type === 'has-text') {
+      const result = await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: `
+            (() => {
+              const baseSelector = ${JSON.stringify(selectorOrObj.baseSelector)};
+              const searchText = ${JSON.stringify(selectorOrObj.searchText)};
+              const elements = document.querySelectorAll(baseSelector);
+
+              for (const el of elements) {
+                const text = el.textContent || el.innerText || '';
+                if (text.includes(searchText)) {
+                  const rect = el.getBoundingClientRect();
+                  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                }
+              }
+              return null;
+            })()
+          `,
+          returnByValue: true
+        }
+      });
+
+      return result.result?.value || null;
+    }
+
+    // Handle regular CSS selector
+    const result = await this._transport.sendCommand('forwardCDPCommand', {
+      method: 'Runtime.evaluate',
+      params: {
+        expression: `
+          (() => {
+            const el = document.querySelector(${JSON.stringify(selectorOrObj)});
+            if (!el) return null;
+            const rect = el.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+          })()
+        `,
+        returnByValue: true
+      }
+    });
+
+    return result.result?.value || null;
+  }
+
+  /**
    * Validate CSS selector - reject common accessibility role names
    */
+  /**
+   * Process selector: preprocess + validate
+   * Returns processed selector (string or object for :has-text)
+   */
+  _processSelector(selector) {
+    const processed = this._preprocessSelector(selector);
+    // Only validate if it's a simple string selector (not :has-text object)
+    if (typeof processed === 'string') {
+      this._validateSelector(processed);
+    }
+    return processed;
+  }
+
+  /**
+   * Get JavaScript expression to find element by processed selector
+   * For use in Runtime.evaluate when you need the element itself (not just coordinates)
+   */
+  _getSelectorExpression(selectorOrObj) {
+    if (typeof selectorOrObj === 'object' && selectorOrObj.type === 'has-text') {
+      // Generate JS to find element by text
+      return `(() => {
+        const baseSelector = ${JSON.stringify(selectorOrObj.baseSelector)};
+        const searchText = ${JSON.stringify(selectorOrObj.searchText)};
+        const elements = document.querySelectorAll(baseSelector);
+        for (const el of elements) {
+          const text = el.textContent || el.innerText || '';
+          if (text.includes(searchText)) return el;
+        }
+        return null;
+      })()`;
+    }
+    // Regular CSS selector
+    return `document.querySelector(${JSON.stringify(selectorOrObj)})`;
+  }
+
+  /**
+   * Preprocess selector to translate Playwright-like syntax to valid CSS
+   * Supports:
+   * - 'button' -> button, input[type="button"], input[type="submit"], a.btn, a[role="button"]
+   * - ':has-text("...")' -> custom JS evaluation to find element by text content
+   */
+  _preprocessSelector(selector) {
+    if (!selector) return selector;
+
+    // Handle :has-text() pseudo-selector
+    // Pattern: :has-text("some text") or :has-text('some text')
+    const hasTextMatch = selector.match(/:has-text\(["']([^"']+)["']\)/);
+    if (hasTextMatch) {
+      const searchText = hasTextMatch[1];
+      const baseSelectorPart = selector.substring(0, hasTextMatch.index);
+
+      // Return special marker that will be handled in element finding
+      return {
+        type: 'has-text',
+        baseSelector: baseSelectorPart || '*',
+        searchText: searchText,
+        originalSelector: selector
+      };
+    }
+
+    // Handle standalone 'button' selector
+    if (selector === 'button') {
+      return 'button, input[type="button"], input[type="submit"], a.btn, a[role="button"]';
+    }
+
+    // Handle 'button' with additional selectors (e.g., 'button.primary')
+    if (selector.startsWith('button.') || selector.startsWith('button#') || selector.startsWith('button[')) {
+      const rest = selector.substring(6); // Remove 'button'
+      return `button${rest}, input[type="button"]${rest}, input[type="submit"]${rest}`;
+    }
+
+    return selector;
+  }
+
   _validateSelector(selector, context = '') {
-    // Common accessibility roles that should not be used as CSS selectors
+    // Common accessibility roles that should NOT be used as CSS selectors
     const INVALID_SELECTORS = [
-      'textbox', 'button', 'link', 'heading', 'list', 'listitem',
+      'textbox', 'link', 'heading', 'list', 'listitem',
       'checkbox', 'radio', 'combobox', 'menu', 'menuitem', 'tab',
       'tabpanel', 'dialog', 'alertdialog', 'toolbar', 'tooltip',
       'navigation', 'search', 'banner', 'main', 'contentinfo',
@@ -825,6 +951,8 @@ class UnifiedBackend {
       'row', 'cell', 'columnheader', 'rowheader', 'grid',
       'StaticText', 'paragraph', 'figure', 'img', 'image'
     ];
+
+    // Note: 'button' is now allowed and will be preprocessed
 
     if (INVALID_SELECTORS.includes(selector)) {
       const suggestion = context ? ` ${context}` : '';
@@ -834,7 +962,8 @@ class UnifiedBackend {
         `  - input[type="text"], input[placeholder="..."]  (for text fields)\n` +
         `  - button, button[type="submit"]  (for buttons)\n` +
         `  - #id, .class-name  (for any element with id or class)\n` +
-        `  - a[href="..."]  (for links)\n\n` +
+        `  - a[href="..."]  (for links)\n` +
+        `  - button:has-text("Click me")  (for buttons with text)\n\n` +
         `Check the accessibility snapshot for element names and values to construct proper selectors.`
       );
     }
@@ -862,30 +991,17 @@ class UnifiedBackend {
 
         switch (action.type) {
           case 'click': {
-            // Validate selector
-            this._validateSelector(action.selector);
+            // Process selector (preprocess + validate)
+            const processedSelector = this._processSelector(action.selector);
 
             // Get element location
-            const elemResult = await this._transport.sendCommand('forwardCDPCommand', {
-              method: 'Runtime.evaluate',
-              params: {
-                expression: `
-                  (() => {
-                    const el = document.querySelector(${JSON.stringify(action.selector)});
-                    if (!el) return null;
-                    const rect = el.getBoundingClientRect();
-                    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-                  })()
-                `,
-                returnByValue: true
-              }
-            });
+            const elemResult = await this._findElement(processedSelector);
 
-            if (!elemResult.result || !elemResult.result.value) {
+            if (!elemResult) {
               throw new Error(`Element not found: ${action.selector}`);
             }
 
-            const { x, y } = elemResult.result.value;
+            const { x, y } = elemResult;
             const button = action.button || 'left';
 
             // Click at coordinates
@@ -914,14 +1030,15 @@ class UnifiedBackend {
           }
 
           case 'type': {
-            // Validate selector
-            this._validateSelector(action.selector);
+            // Process selector (preprocess + validate)
+            const processedSelector = this._processSelector(action.selector);
+            const selectorExpr = this._getSelectorExpression(processedSelector);
 
             // Focus element first
             await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Runtime.evaluate',
               params: {
-                expression: `document.querySelector(${JSON.stringify(action.selector)})?.focus()`,
+                expression: `${selectorExpr}?.focus()`,
                 returnByValue: false
               }
             });
@@ -941,7 +1058,7 @@ class UnifiedBackend {
             const valueResult = await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Runtime.evaluate',
               params: {
-                expression: `document.querySelector(${JSON.stringify(action.selector)})?.value`,
+                expression: `${selectorExpr}?.value`,
                 returnByValue: true
               }
             });
@@ -957,8 +1074,9 @@ class UnifiedBackend {
           }
 
           case 'clear': {
-            // Validate selector
-            this._validateSelector(action.selector);
+            // Process selector (preprocess + validate)
+            const processedSelector = this._processSelector(action.selector);
+            const selectorExpr = this._getSelectorExpression(processedSelector);
 
             // Clear the field by selecting all and deleting
             await this._transport.sendCommand('forwardCDPCommand', {
@@ -966,7 +1084,7 @@ class UnifiedBackend {
               params: {
                 expression: `
                   (() => {
-                    const el = document.querySelector(${JSON.stringify(action.selector)});
+                    const el = ${selectorExpr};
                     if (!el) return false;
                     el.value = '';
                     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1034,30 +1152,17 @@ class UnifiedBackend {
           }
 
           case 'hover': {
-            // Validate selector
-            this._validateSelector(action.selector);
+            // Process selector (preprocess + validate)
+            const processedSelector = this._processSelector(action.selector);
 
             // Get element location
-            const elemResult = await this._transport.sendCommand('forwardCDPCommand', {
-              method: 'Runtime.evaluate',
-              params: {
-                expression: `
-                  (() => {
-                    const el = document.querySelector(${JSON.stringify(action.selector)});
-                    if (!el) return null;
-                    const rect = el.getBoundingClientRect();
-                    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-                  })()
-                `,
-                returnByValue: true
-              }
-            });
+            const elemResult = await this._findElement(processedSelector);
 
-            if (!elemResult.result || !elemResult.result.value) {
+            if (!elemResult) {
               throw new Error(`Element not found: ${action.selector}`);
             }
 
-            const { x, y } = elemResult.result.value;
+            const { x, y } = elemResult;
 
             // Move mouse
             await this._transport.sendCommand('forwardCDPCommand', {
@@ -1152,10 +1257,9 @@ class UnifiedBackend {
           }
 
           case 'scroll_to': {
-            // Validate selector if provided
-            if (action.selector) {
-              this._validateSelector(action.selector);
-            }
+            // Process selector if provided (preprocess + validate)
+            const processedSelector = action.selector ? this._processSelector(action.selector) : null;
+            const selectorExpr = processedSelector ? this._getSelectorExpression(processedSelector) : null;
 
             // Scroll window or element to specific coordinates and detect scrollable areas
             const scrollToResult = await this._transport.sendCommand('forwardCDPCommand', {
@@ -1164,7 +1268,7 @@ class UnifiedBackend {
                 expression: `
                   (() => {
                     ${action.selector ? `
-                      const el = document.querySelector(${JSON.stringify(action.selector)});
+                      const el = ${selectorExpr};
                       if (!el) return { error: 'Element not found: ${action.selector}' };
                       const beforeX = el.scrollLeft;
                       const beforeY = el.scrollTop;
@@ -1249,10 +1353,9 @@ class UnifiedBackend {
           }
 
           case 'scroll_by': {
-            // Validate selector if provided
-            if (action.selector) {
-              this._validateSelector(action.selector);
-            }
+            // Process selector if provided (preprocess + validate)
+            const processedSelector = action.selector ? this._processSelector(action.selector) : null;
+            const selectorExpr = processedSelector ? this._getSelectorExpression(processedSelector) : null;
 
             // Scroll window or element by offset and detect scrollable areas
             const scrollByResult = await this._transport.sendCommand('forwardCDPCommand', {
@@ -1261,7 +1364,7 @@ class UnifiedBackend {
                 expression: `
                   (() => {
                     ${action.selector ? `
-                      const el = document.querySelector(${JSON.stringify(action.selector)});
+                      const el = ${selectorExpr};
                       if (!el) return { error: 'Element not found: ${action.selector}' };
                       const beforeX = el.scrollLeft;
                       const beforeY = el.scrollTop;
@@ -1346,8 +1449,9 @@ class UnifiedBackend {
           }
 
           case 'scroll_into_view': {
-            // Validate selector
-            this._validateSelector(action.selector);
+            // Process selector (preprocess + validate)
+            const processedSelector = this._processSelector(action.selector);
+            const selectorExpr = this._getSelectorExpression(processedSelector);
 
             // Scroll element into view
             const scrollResult = await this._transport.sendCommand('forwardCDPCommand', {
@@ -1355,7 +1459,7 @@ class UnifiedBackend {
               params: {
                 expression: `
                   (() => {
-                    const el = document.querySelector(${JSON.stringify(action.selector)});
+                    const el = ${selectorExpr};
                     if (!el) return { error: 'Element not found' };
                     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     return { success: true };
@@ -1374,8 +1478,9 @@ class UnifiedBackend {
           }
 
           case 'select_option': {
-            // Validate selector
-            this._validateSelector(action.selector);
+            // Process selector (preprocess + validate)
+            const processedSelector = this._processSelector(action.selector);
+            const selectorExpr = this._getSelectorExpression(processedSelector);
 
             // Select option in dropdown
             const selectResult = await this._transport.sendCommand('forwardCDPCommand', {
@@ -1383,7 +1488,7 @@ class UnifiedBackend {
               params: {
                 expression: `
                   (() => {
-                    const select = document.querySelector(${JSON.stringify(action.selector)});
+                    const select = ${selectorExpr};
                     if (!select) return { error: 'Select element not found' };
                     select.value = ${JSON.stringify(action.value)};
                     select.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1403,8 +1508,9 @@ class UnifiedBackend {
           }
 
           case 'file_upload': {
-            // Validate selector
-            this._validateSelector(action.selector);
+            // Process selector (preprocess + validate)
+            const processedSelector = this._processSelector(action.selector);
+            const selectorExpr = this._getSelectorExpression(processedSelector);
 
             // Upload file(s) to input element
             const files = action.files || [];
@@ -1418,7 +1524,7 @@ class UnifiedBackend {
               params: {
                 expression: `
                   (() => {
-                    const el = document.querySelector(${JSON.stringify(action.selector)});
+                    const el = ${selectorExpr};
                     if (!el) throw new Error('File input not found');
                     return el;
                   })()
