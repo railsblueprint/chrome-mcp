@@ -456,16 +456,38 @@ class StatefulBackend {
       await mcpConnection.sendRequest('mcp_handshake', handshakeParams);
       debugLog('[StatefulBackend] Authenticated with proxy');
 
-      // List available extensions
-      const extensionsResult = await mcpConnection.sendRequest('list_extensions', {});
-      debugLog('[StatefulBackend] Available extensions:', extensionsResult);
+      // List available extensions with retry logic to handle race condition
+      // Extension might be connecting at the same time, give it a few seconds
+      let extensionsResult = null;
+      let browsers = [];
+      const maxRetries = 3;
+      const retryDelays = [1000, 2000, 3000]; // 1s, 2s, 3s
 
-      if (!extensionsResult || !extensionsResult.extensions || extensionsResult.extensions.length === 0) {
-        await mcpConnection.close();
-        throw new Error('No browser extensions are connected to the proxy.');
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        extensionsResult = await mcpConnection.sendRequest('list_extensions', {});
+        debugLog(`[StatefulBackend] Available extensions (attempt ${attempt + 1}/${maxRetries}):`, extensionsResult);
+
+        if (extensionsResult && extensionsResult.extensions && extensionsResult.extensions.length > 0) {
+          browsers = extensionsResult.extensions;
+          break;
+        }
+
+        // Wait before retrying (unless this is the last attempt)
+        if (attempt < maxRetries - 1) {
+          debugLog(`[StatefulBackend] No extensions found, waiting ${retryDelays[attempt]}ms before retry...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelays[attempt]));
+        }
       }
 
-      const browsers = extensionsResult.extensions;
+      if (browsers.length === 0) {
+        await mcpConnection.close();
+        throw new Error('No browser extensions are connected to the proxy.\n\n' +
+                        'The extension might still be connecting. Please:\n' +
+                        '1. Check that the Chrome extension is installed and enabled\n' +
+                        '2. Click the extension icon to verify it shows "Connected"\n' +
+                        '3. Wait a few seconds and try again\n\n' +
+                        'If the problem persists, try reloading the extension or restarting Chrome.');
+      }
 
       if (browsers.length === 1) {
         // Single browser - auto-connect
