@@ -145,6 +145,24 @@
       border-radius: 3px;
       font-size: 12px;
     }
+    .scrollable-container {
+      width: 100%;
+      max-width: 500px;
+      height: 200px;
+      border: 2px solid #1c75bc;
+      overflow: auto;
+      margin: 15px 0;
+      padding: 15px;
+      background-color: #f9f9f9;
+      border-radius: 4px;
+    }
+    .scrollable-content {
+      height: 800px;
+      width: 100%;
+    }
+    .scroll-section {
+      margin-bottom: 1000px;
+    }
   </style>
 </head>
 <body>
@@ -260,6 +278,84 @@
     <button id="delayed-show">Show Element After 2s</button>
     <div id="delayed-element" class="hidden-element">
       ⏰ This element appeared after a delay!
+    </div>
+  </div>
+
+  <!-- Scroll Testing Section -->
+  <div class="test-section">
+    <h2>📜 Scroll Testing (scroll_to, scroll_by, scroll_into_view)</h2>
+    <p>This page has both window scrolling and element-specific scrollable containers.</p>
+
+    <h3>Scrollable Container #1</h3>
+    <div id="scroll-container-1" class="scrollable-container">
+      <div class="scrollable-content">
+        <p><strong>Container 1:</strong> This is a scrollable div with lots of content...</p>
+        <p>Scroll down to see more content. You can use:</p>
+        <ul>
+          <li><code>scroll_by</code> with <code>selector: "#scroll-container-1"</code> and <code>y: 100</code></li>
+          <li><code>scroll_to</code> with <code>selector: "#scroll-container-1"</code> and <code>y: 500</code></li>
+        </ul>
+        <p>Line 5</p>
+        <p>Line 6</p>
+        <p>Line 7</p>
+        <p>Line 8</p>
+        <p>Line 9</p>
+        <p>Line 10</p>
+        <p>Line 11</p>
+        <p>Line 12</p>
+        <p>Line 13</p>
+        <p>Line 14</p>
+        <p>Line 15</p>
+        <p>🎯 You've reached the end!</p>
+      </div>
+    </div>
+
+    <h3>Scrollable Container #2</h3>
+    <div id="scroll-container-2" class="scrollable-container">
+      <div class="scrollable-content">
+        <p><strong>Container 2:</strong> Another scrollable container...</p>
+        <p>This one can be scrolled independently from Container #1.</p>
+        <p>Line 3</p>
+        <p>Line 4</p>
+        <p>Line 5</p>
+        <p>Line 6</p>
+        <p>Line 7</p>
+        <p>Line 8</p>
+        <p>Line 9</p>
+        <p>Line 10</p>
+        <p>Line 11</p>
+        <p>Line 12</p>
+        <p>🏁 End of container 2</p>
+      </div>
+    </div>
+
+    <p><strong>Tip:</strong> When you try to scroll without a selector (window scroll),
+    the system will detect and report all scrollable areas on the page!</p>
+  </div>
+
+  <!-- Page Scroll Section (makes page itself scrollable) -->
+  <div class="scroll-section">
+    <div class="test-section">
+      <h2>⬇️ Page Content Section 1</h2>
+      <p>This section makes the entire page scrollable. Try scrolling the window without a selector:</p>
+      <ul>
+        <li><code>scroll_by</code> with <code>y: 500</code> (no selector)</li>
+        <li><code>scroll_to</code> with <code>y: 1000</code> (no selector)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scroll-section">
+    <div class="test-section">
+      <h2>⬇️ Page Content Section 2</h2>
+      <p>More content down here to make the page vertically scrollable...</p>
+    </div>
+  </div>
+
+  <div class="scroll-section">
+    <div class="test-section">
+      <h2>⬇️ Page Content Section 3</h2>
+      <p>Even more content at the bottom of the page...</p>
     </div>
   </div>
 

@@ -172,7 +172,7 @@ class UnifiedBackend {
       // Interaction
       {
         name: 'browser_interact',
-        description: 'Perform one or more browser interactions in sequence (click, type, press keys, hover, wait)',
+        description: 'Perform one or more browser interactions in sequence (click, type, press keys, hover, scroll, wait). Scroll actions report success/failure and detect all scrollable areas on the page.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -187,7 +187,7 @@ class UnifiedBackend {
                     enum: ['click', 'type', 'clear', 'press_key', 'hover', 'wait', 'mouse_move', 'mouse_click', 'scroll_to', 'scroll_by', 'scroll_into_view', 'select_option', 'file_upload'],
                     description: 'Type of interaction'
                   },
-                  selector: { type: 'string', description: 'CSS selector (for click, type, clear, hover, scroll_into_view, select_option, file_upload)' },
+                  selector: { type: 'string', description: 'CSS selector (for click, type, clear, hover, scroll_to, scroll_by, scroll_into_view, select_option, file_upload). For scroll_to/scroll_by: scrolls the element instead of the window' },
                   text: { type: 'string', description: 'Text to type (for type action)' },
                   key: { type: 'string', description: 'Key to press (for press_key action)' },
                   value: { type: 'string', description: 'Option value to select (for select_option action)' },
@@ -1149,30 +1149,196 @@ class UnifiedBackend {
           }
 
           case 'scroll_to': {
-            // Scroll window to specific coordinates
-            await this._transport.sendCommand('forwardCDPCommand', {
+            // Validate selector if provided
+            if (action.selector) {
+              this._validateSelector(action.selector);
+            }
+
+            // Scroll window or element to specific coordinates and detect scrollable areas
+            const scrollToResult = await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Runtime.evaluate',
               params: {
-                expression: `window.scrollTo(${action.x || 0}, ${action.y || 0})`,
-                returnByValue: false
+                expression: `
+                  (() => {
+                    ${action.selector ? `
+                      const el = document.querySelector(${JSON.stringify(action.selector)});
+                      if (!el) return { error: 'Element not found: ${action.selector}' };
+                      const beforeX = el.scrollLeft;
+                      const beforeY = el.scrollTop;
+                      el.scrollTo(${action.x || 0}, ${action.y || 0});
+                      const afterX = el.scrollLeft;
+                      const afterY = el.scrollTop;
+                      const target = ${JSON.stringify(action.selector)};
+                    ` : `
+                      const beforeX = window.scrollX;
+                      const beforeY = window.scrollY;
+                      window.scrollTo(${action.x || 0}, ${action.y || 0});
+                      const afterX = window.scrollX;
+                      const afterY = window.scrollY;
+                      const target = 'window';
+                    `}
+
+                    const success = afterX !== beforeX || afterY !== beforeY;
+
+                    // Detect scrollable areas
+                    const scrollableAreas = [];
+                    document.querySelectorAll('*').forEach(el => {
+                      const style = window.getComputedStyle(el);
+                      const overflowX = style.overflowX;
+                      const overflowY = style.overflowY;
+
+                      if ((overflowX === 'auto' || overflowX === 'scroll' ||
+                           overflowY === 'auto' || overflowY === 'scroll') &&
+                          (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth)) {
+
+                        // Generate selector
+                        let selector = el.tagName.toLowerCase();
+                        if (el.id) selector += '#' + el.id;
+                        else if (el.className && typeof el.className === 'string') {
+                          const classes = el.className.trim().split(/\\s+/).slice(0, 2);
+                          if (classes.length) selector += '.' + classes.join('.');
+                        }
+
+                        scrollableAreas.push({
+                          selector,
+                          canScrollX: el.scrollWidth > el.clientWidth,
+                          canScrollY: el.scrollHeight > el.clientHeight,
+                          scrollWidth: el.scrollWidth,
+                          scrollHeight: el.scrollHeight,
+                          clientWidth: el.clientWidth,
+                          clientHeight: el.clientHeight
+                        });
+                      }
+                    });
+
+                    return { success, beforeX, beforeY, afterX, afterY, scrollableAreas, target };
+                  })()
+                `,
+                returnByValue: true
               }
             });
 
-            result = `Scrolled to (${action.x || 0}, ${action.y || 0})`;
+            const scrollData = scrollToResult.result?.value || {};
+            if (scrollData.error) {
+              throw new Error(scrollData.error);
+            }
+
+            const targetDesc = action.selector ? `element "${action.selector}"` : 'window';
+            if (scrollData.success) {
+              result = `Scrolled ${targetDesc} to (${action.x || 0}, ${action.y || 0}) - actual position: (${scrollData.afterX}, ${scrollData.afterY})`;
+            } else {
+              result = `Scroll ${targetDesc} to (${action.x || 0}, ${action.y || 0}) had no effect - already at position (${scrollData.afterX}, ${scrollData.afterY})`;
+            }
+
+            if (scrollData.scrollableAreas && scrollData.scrollableAreas.length > 0) {
+              result += `\n\nScrollable areas on page (${scrollData.scrollableAreas.length} found):`;
+              scrollData.scrollableAreas.slice(0, 10).forEach((area, i) => {
+                const directions = [];
+                if (area.canScrollX) directions.push('horizontal');
+                if (area.canScrollY) directions.push('vertical');
+                result += `\n${i + 1}. ${area.selector} (${directions.join(', ')}) - ${area.scrollWidth}x${area.scrollHeight} content in ${area.clientWidth}x${area.clientHeight} viewport`;
+              });
+              if (scrollData.scrollableAreas.length > 10) {
+                result += `\n... and ${scrollData.scrollableAreas.length - 10} more`;
+              }
+            }
             break;
           }
 
           case 'scroll_by': {
-            // Scroll window by offset
-            await this._transport.sendCommand('forwardCDPCommand', {
+            // Validate selector if provided
+            if (action.selector) {
+              this._validateSelector(action.selector);
+            }
+
+            // Scroll window or element by offset and detect scrollable areas
+            const scrollByResult = await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Runtime.evaluate',
               params: {
-                expression: `window.scrollBy(${action.x || 0}, ${action.y || 0})`,
-                returnByValue: false
+                expression: `
+                  (() => {
+                    ${action.selector ? `
+                      const el = document.querySelector(${JSON.stringify(action.selector)});
+                      if (!el) return { error: 'Element not found: ${action.selector}' };
+                      const beforeX = el.scrollLeft;
+                      const beforeY = el.scrollTop;
+                      el.scrollBy(${action.x || 0}, ${action.y || 0});
+                      const afterX = el.scrollLeft;
+                      const afterY = el.scrollTop;
+                      const target = ${JSON.stringify(action.selector)};
+                    ` : `
+                      const beforeX = window.scrollX;
+                      const beforeY = window.scrollY;
+                      window.scrollBy(${action.x || 0}, ${action.y || 0});
+                      const afterX = window.scrollX;
+                      const afterY = window.scrollY;
+                      const target = 'window';
+                    `}
+
+                    const success = afterX !== beforeX || afterY !== beforeY;
+
+                    // Detect scrollable areas
+                    const scrollableAreas = [];
+                    document.querySelectorAll('*').forEach(el => {
+                      const style = window.getComputedStyle(el);
+                      const overflowX = style.overflowX;
+                      const overflowY = style.overflowY;
+
+                      if ((overflowX === 'auto' || overflowX === 'scroll' ||
+                           overflowY === 'auto' || overflowY === 'scroll') &&
+                          (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth)) {
+
+                        // Generate selector
+                        let selector = el.tagName.toLowerCase();
+                        if (el.id) selector += '#' + el.id;
+                        else if (el.className && typeof el.className === 'string') {
+                          const classes = el.className.trim().split(/\\s+/).slice(0, 2);
+                          if (classes.length) selector += '.' + classes.join('.');
+                        }
+
+                        scrollableAreas.push({
+                          selector,
+                          canScrollX: el.scrollWidth > el.clientWidth,
+                          canScrollY: el.scrollHeight > el.clientHeight,
+                          scrollWidth: el.scrollWidth,
+                          scrollHeight: el.scrollHeight,
+                          clientWidth: el.clientWidth,
+                          clientHeight: el.clientHeight
+                        });
+                      }
+                    });
+
+                    return { success, beforeX, beforeY, afterX, afterY, scrollableAreas, target };
+                  })()
+                `,
+                returnByValue: true
               }
             });
 
-            result = `Scrolled by (${action.x || 0}, ${action.y || 0})`;
+            const scrollData = scrollByResult.result?.value || {};
+            if (scrollData.error) {
+              throw new Error(scrollData.error);
+            }
+
+            const targetDesc = action.selector ? `element "${action.selector}"` : 'window';
+            if (scrollData.success) {
+              result = `Scrolled ${targetDesc} by (${action.x || 0}, ${action.y || 0}) - now at position: (${scrollData.afterX}, ${scrollData.afterY})`;
+            } else {
+              result = `Scroll ${targetDesc} by (${action.x || 0}, ${action.y || 0}) had no effect - still at position (${scrollData.afterX}, ${scrollData.afterY}). The ${targetDesc} may not be scrollable in that direction.`;
+            }
+
+            if (scrollData.scrollableAreas && scrollData.scrollableAreas.length > 0) {
+              result += `\n\nScrollable areas on page (${scrollData.scrollableAreas.length} found):`;
+              scrollData.scrollableAreas.slice(0, 10).forEach((area, i) => {
+                const directions = [];
+                if (area.canScrollX) directions.push('horizontal');
+                if (area.canScrollY) directions.push('vertical');
+                result += `\n${i + 1}. ${area.selector} (${directions.join(', ')}) - ${area.scrollWidth}x${area.scrollHeight} content in ${area.clientWidth}x${area.clientHeight} viewport`;
+              });
+              if (scrollData.scrollableAreas.length > 10) {
+                result += `\n... and ${scrollData.scrollableAreas.length - 10} more`;
+              }
+            }
             break;
           }
 
