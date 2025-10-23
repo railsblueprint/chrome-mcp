@@ -1789,22 +1789,42 @@ class UnifiedBackend {
       }
     });
 
+    const buffer = Buffer.from(result.data, 'base64');
+    const sizeKB = buffer.length / 1024;
+
+    // Check image dimensions to prevent API blocking
+    const sizeOf = require('image-size');
+    const dimensions = sizeOf(buffer);
+
     // If path is provided, save the screenshot to disk
     if (args.path && result.data) {
       const fs = require('fs');
-      const buffer = Buffer.from(result.data, 'base64');
       fs.writeFileSync(args.path, buffer);
 
       return {
         content: [{
           type: 'text',
-          text: `### Screenshot Saved\n\nFile: ${args.path}\nFormat: ${format.toUpperCase()}\nSize: ${buffer.length} bytes (${(buffer.length / 1024).toFixed(2)} KB)${args.fullPage ? '\nType: Full page' : '\nType: Viewport only'}`
+          text: `### Screenshot Saved\n\nFile: ${args.path}\nFormat: ${format.toUpperCase()}\nDimensions: ${dimensions.width}x${dimensions.height}\nSize: ${sizeKB.toFixed(2)} KB${args.fullPage ? '\nType: Full page' : '\nType: Viewport only'}`
         }],
         isError: false
       };
     }
 
-    // Return base64 image if no path provided
+    // Check dimension limits for inline images
+    // Claude API blocks images with width or height > 2000px
+    const MAX_DIMENSION = 2000;
+
+    if (dimensions.width > MAX_DIMENSION || dimensions.height > MAX_DIMENSION) {
+      return {
+        content: [{
+          type: 'text',
+          text: `### Screenshot Dimensions Too Large for Inline Display\n\n**Dimensions:** ${dimensions.width}x${dimensions.height} px\n**Limit:** ${MAX_DIMENSION}px (width or height)\n**Size:** ${sizeKB.toFixed(2)} KB\n\n**Images with dimensions exceeding ${MAX_DIMENSION}px cause API communication errors.**\n\n**Solution:** Save to a file instead:\n\`\`\`\nbrowser_take_screenshot path='/path/to/screenshot.${format}' ${args.fullPage ? 'fullPage=true ' : ''}${format === 'jpeg' ? `quality=${quality}` : ''}\n\`\`\`\n\n**Tips to reduce dimensions:**\n- Use viewport only (remove \`fullPage=true\`) - typically 1280x720 or similar\n- Resize browser window to smaller size before screenshot\n- Use \`browser_window action='resize' width=1280 height=720\``
+        }],
+        isError: true
+      };
+    }
+
+    // Return base64 image if no path provided and dimensions are acceptable
     return {
       content: [{
         type: 'image',
