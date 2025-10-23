@@ -457,11 +457,11 @@ class StatefulBackend {
       debugLog('[StatefulBackend] Authenticated with proxy');
 
       // List available extensions with retry logic to handle race condition
-      // Extension might be connecting at the same time, give it a few seconds
+      // Extension might be connecting at the same time, give it more time
       let extensionsResult = null;
       let browsers = [];
-      const maxRetries = 3;
-      const retryDelays = [1000, 2000, 3000]; // 1s, 2s, 3s
+      const maxRetries = 5;
+      const retryDelays = [2000, 3000, 4000, 5000]; // 2s, 3s, 4s, 5s (total: 14s)
 
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         extensionsResult = await mcpConnection.sendRequest('list_extensions', {});
@@ -481,12 +481,15 @@ class StatefulBackend {
 
       if (browsers.length === 0) {
         await mcpConnection.close();
-        throw new Error('No browser extensions are connected to the proxy.\n\n' +
-                        'The extension might still be connecting. Please:\n' +
-                        '1. Check that the Chrome extension is installed and enabled\n' +
-                        '2. Click the extension icon to verify it shows "Connected"\n' +
-                        '3. Wait a few seconds and try again\n\n' +
-                        'If the problem persists, try reloading the extension or restarting Chrome.');
+        const version = require('../package.json').version;
+        throw new Error(`No browser extensions are connected to the proxy.\n\n` +
+                        `**MCP Server:** v${version}\n` +
+                        `**Tried:** ${maxRetries} times over 14 seconds\n\n` +
+                        `The extension might still be connecting. Please:\n` +
+                        `1. Check that the Chrome extension is installed and enabled\n` +
+                        `2. Click the extension icon to verify it shows "Connected"\n` +
+                        `3. Wait a few seconds and try again\n\n` +
+                        `If the problem persists, try reloading the extension or restarting Chrome.`);
       }
 
       if (browsers.length === 1) {
