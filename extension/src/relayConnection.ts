@@ -659,6 +659,15 @@ export class RelayConnection {
   private async _handleConnectionStatusNotification(params: any): Promise<void> {
     debugLog('Received connection_status notification:', params);
 
+    // Extract project_name from active_connections if available
+    if (params.active_connections && params.active_connections.length > 0) {
+      const firstConnection = params.active_connections[0];
+      if (firstConnection.project_name && this.onProjectConnected) {
+        debugLog('Project connected from connection_status:', firstConnection.project_name);
+        this.onProjectConnected(firstConnection.project_name);
+      }
+    }
+
     // Notify the background script about connection status update
     if (this.onConnectionStatus) {
       this.onConnectionStatus({
