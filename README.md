@@ -166,7 +166,10 @@ The MCP server provides these tools to AI assistants:
 - `browser_take_screenshot` - Capture visual screenshot
 - `browser_console_messages` - Get browser console logs
 - `browser_network_requests` - Powerful network monitoring and replay tool with multiple actions:
-  - **List mode** (default): Lightweight overview of all requests (URL, method, status, time)
+  - **List mode** (default): Lightweight overview with filtering and pagination (default: 20 requests)
+    - Filters: `urlPattern` (substring), `method` (GET/POST), `status` (200/404), `resourceType` (xhr/fetch/script)
+    - Pagination: `limit` (default: 20), `offset` (default: 0)
+    - Example: `action='list', urlPattern='api/users', method='GET', limit=10`
   - **Details mode**: Full request/response data for specific request including headers and bodies
   - **JSONPath filtering**: Query large JSON responses using JSONPath syntax (e.g., `$.data.items[0]`)
   - **Replay mode**: Re-execute captured requests with original headers and authentication

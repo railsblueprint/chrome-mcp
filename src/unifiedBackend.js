@@ -343,15 +343,41 @@ class UnifiedBackend {
       // Network
       {
         name: 'browser_network_requests',
-        description: 'Powerful network monitoring and replay tool with multiple actions: list (lightweight overview), details (full request/response with headers/bodies), replay (re-execute request), clear (free memory). Supports JSONPath filtering for large JSON responses.',
+        description: 'Powerful network monitoring and replay tool with multiple actions: list (lightweight overview with filtering/pagination), details (full request/response with headers/bodies), replay (re-execute request), clear (free memory). Supports JSONPath filtering for large JSON responses.',
         inputSchema: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
               enum: ['list', 'details', 'replay', 'clear'],
-              description: 'Action to perform: list (default, shows all requests), details (get full data for specific request), replay (re-execute request), clear (clear history)'
+              description: 'Action to perform: list (default, shows requests with filtering/pagination), details (get full data for specific request), replay (re-execute request), clear (clear history)'
             },
+            // List action filters
+            urlPattern: {
+              type: 'string',
+              description: 'Filter requests by URL substring (case-insensitive, for list action). Example: "api/users"'
+            },
+            method: {
+              type: 'string',
+              description: 'Filter by HTTP method (for list action). Example: "GET", "POST"'
+            },
+            status: {
+              type: 'number',
+              description: 'Filter by HTTP status code (for list action). Example: 200, 404, 500'
+            },
+            resourceType: {
+              type: 'string',
+              description: 'Filter by resource type (for list action). Examples: "document", "xhr", "fetch", "script", "stylesheet", "image"'
+            },
+            limit: {
+              type: 'number',
+              description: 'Maximum number of requests to return (for list action, default: 20)'
+            },
+            offset: {
+              type: 'number',
+              description: 'Number of requests to skip for pagination (for list action, default: 0)'
+            },
+            // Details/replay actions
             requestId: {
               type: 'string',
               description: 'Request ID from list view (required for details/replay actions). Format: "12345.67"'
@@ -2277,19 +2303,75 @@ class UnifiedBackend {
       };
     }
 
-    // Action: list (default - lightweight view)
+    // Action: list (default - lightweight view with filtering and pagination)
     if (action === 'list') {
-      const listItems = requests.map((req, index) => {
+      // Apply filters
+      let filteredRequests = requests;
+
+      // Filter by URL pattern (case-insensitive substring match)
+      if (args.urlPattern) {
+        const pattern = args.urlPattern.toLowerCase();
+        filteredRequests = filteredRequests.filter(req => req.url.toLowerCase().includes(pattern));
+      }
+
+      // Filter by method
+      if (args.method) {
+        filteredRequests = filteredRequests.filter(req => req.method === args.method.toUpperCase());
+      }
+
+      // Filter by status code
+      if (args.status) {
+        filteredRequests = filteredRequests.filter(req => req.statusCode === args.status);
+      }
+
+      // Filter by resource type
+      if (args.resourceType) {
+        filteredRequests = filteredRequests.filter(req => req.type === args.resourceType);
+      }
+
+      const totalFiltered = filteredRequests.length;
+
+      // Pagination
+      const limit = args.limit !== undefined ? args.limit : 20; // Default: 20 requests
+      const offset = args.offset || 0;
+      const paginatedRequests = filteredRequests.slice(offset, offset + limit);
+
+      if (paginatedRequests.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: `### Network Requests\n\nNo requests match your filters.\n\n**Total captured:** ${requests.length}\n**After filters:** 0\n\n**Try:**\n- Remove or adjust filters\n- Use \`action='clear'\` to clear history and start fresh`
+          }],
+          isError: false
+        };
+      }
+
+      const listItems = paginatedRequests.map((req, index) => {
+        const actualIndex = offset + index;
         const status = req.statusCode ? `${req.statusCode} ${req.statusText}` : 'Pending';
         const type = req.type ? ` [${req.type}]` : '';
         const timestamp = new Date(req.timestamp).toISOString().split('T')[1].split('.')[0];
-        return `${index}. **${req.method} ${req.url.length > 80 ? req.url.substring(0, 80) + '...' : req.url}**${type}\n   Status: ${status} | Time: ${timestamp} | ID: \`${req.requestId}\``;
+        return `${actualIndex}. **${req.method} ${req.url.length > 80 ? req.url.substring(0, 80) + '...' : req.url}**${type}\n   Status: ${status} | Time: ${timestamp} | ID: \`${req.requestId}\``;
       }).join('\n\n');
+
+      // Build filter summary
+      const filterSummary = [];
+      if (args.urlPattern) filterSummary.push(`URL: *${args.urlPattern}*`);
+      if (args.method) filterSummary.push(`Method: ${args.method}`);
+      if (args.status) filterSummary.push(`Status: ${args.status}`);
+      if (args.resourceType) filterSummary.push(`Type: ${args.resourceType}`);
+      const filterText = filterSummary.length > 0 ? `\n**Filters:** ${filterSummary.join(', ')}` : '';
+
+      // Pagination info
+      const hasMore = offset + limit < totalFiltered;
+      const paginationInfo = totalFiltered > limit
+        ? `\n**Showing:** ${offset + 1}-${offset + paginatedRequests.length} of ${totalFiltered}${hasMore ? ` (use \`offset=${offset + limit}\` for next page)` : ''}`
+        : '';
 
       return {
         content: [{
           type: 'text',
-          text: `### Network Requests (${requests.length})\n\n${listItems}\n\n**Actions:**\n- \`action='details', requestId='...'\` - Get full details including headers and body\n- \`action='replay', requestId='...'\` - Replay a request\n- \`action='clear'\` - Clear history`
+          text: `### Network Requests${filterText}${paginationInfo}\n\n${listItems}\n\n**Actions:**\n- \`action='details', requestId='...'\` - Get full details including headers and body\n- \`action='replay', requestId='...'\` - Replay a request\n- \`action='clear'\` - Clear history\n\n**Filters:** Add \`urlPattern\`, \`method\`, \`status\`, or \`resourceType\` parameters\n**Pagination:** Use \`limit\` (default: 20) and \`offset\` (default: 0) parameters`
         }],
         isError: false
       };
