@@ -335,10 +335,19 @@ class StatefulBackend {
       this._extensionServer = new ExtensionServer(5555, '127.0.0.1');
       await this._extensionServer.start();
 
+      // Send client_id to extension if connected
+      if (this._clientId) {
+        this._extensionServer.setClientId(this._clientId);
+      }
+
       // Handle extension reconnections (e.g., after extension reload)
       this._extensionServer.onReconnect = () => {
         debugLog('[StatefulBackend] Extension reconnected, resetting attached tab state...');
         this._attachedTab = null; // Clear attached tab since extension reloaded
+        // Resend client_id to newly connected extension
+        if (this._clientId) {
+          this._extensionServer.setClientId(this._clientId);
+        }
         // Keep the same state and backend since the server connection is still valid
       };
 

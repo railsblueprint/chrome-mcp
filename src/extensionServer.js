@@ -24,6 +24,7 @@ class ExtensionServer {
     this._pendingRequests = new Map(); // requestId -> {resolve, reject}
     this.onReconnect = null; // Callback when extension reconnects (replaces old connection)
     this.onTabInfoUpdate = null; // Callback when tab info changes (for status header updates)
+    this._clientId = null; // MCP client_id to display in extension
   }
 
   /**
@@ -172,6 +173,27 @@ class ExtensionServer {
       debugLog('Sending to extension:', method);
       this._extensionWs.send(JSON.stringify(message));
     });
+  }
+
+  /**
+   * Set client_id and notify extension
+   */
+  setClientId(clientId) {
+    this._clientId = clientId;
+    debugLog('Client ID set to:', clientId);
+
+    // Send notification to extension if connected
+    if (this.isConnected()) {
+      const notification = {
+        jsonrpc: '2.0',
+        method: 'authenticated',
+        params: {
+          client_id: clientId
+        }
+      };
+      debugLog('Sending client_id notification to extension');
+      this._extensionWs.send(JSON.stringify(notification));
+    }
   }
 
   /**
