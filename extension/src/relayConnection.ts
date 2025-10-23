@@ -87,8 +87,9 @@ export class RelayConnection {
   private _browserName: string;
   private _accessToken?: string;
   private _stableClientId?: string; // Stable client ID for rolling updates
-  private _consoleMessages: Array<{ type: string; text: string; timestamp: number; url?: string; lineNumber?: number }> = [];
-  private _networkRequests: Array<{
+  // Per-tab storage for console messages and network requests
+  private _consoleMessages: Map<number, Array<{ type: string; text: string; timestamp: number; url?: string; lineNumber?: number }>> = new Map();
+  private _networkRequests: Map<number, Array<{
     requestId: string;
     url: string;
     method: string;
@@ -99,11 +100,12 @@ export class RelayConnection {
     requestHeaders?: Record<string, string>;
     responseHeaders?: Record<string, string>;
     requestBody?: string;
-  }> = [];
+  }>> = new Map();
   private _requestsMap: Map<string, any> = new Map(); // requestId → request details
   private _executionContexts: Map<number, any> = new Map(); // contextId → context info
   private _mainContextId: number | null = null; // Main page execution context
   private _extensionContexts: Map<string, Set<number>> = new Map(); // extensionId → Set of contextIds
+  private _cleanupInterval?: ReturnType<typeof setInterval>; // Periodic cleanup for stale tab data
 
   onclose?: () => void;
   onStealthModeSet?: (stealth: boolean) => void;
@@ -134,6 +136,11 @@ export class RelayConnection {
     chrome.debugger.onEvent.addListener(this._eventListener);
     chrome.debugger.onDetach.addListener(this._detachListener);
 
+    // Start periodic cleanup for stale tab data (every 5 minutes)
+    this._cleanupInterval = setInterval(() => {
+      this.cleanupStaleTabData().catch(err => debugLog('Cleanup error:', err));
+    }, 5 * 60 * 1000); // 5 minutes
+
     // In proxy mode: Extension is PASSIVE - wait for proxy to send authenticate request
     // In direct mode: This still works but is legacy (will be replaced by JSON-RPC)
     debugLog('Connection established, WebSocket state:', ws.readyState);
@@ -160,10 +167,11 @@ export class RelayConnection {
       } catch (error) {
         debugLog(`Error detaching debugger from tab ${tabId}:`, error);
       }
+      // Clean up tracking data for this specific tab
+      this.clearTabTracking(tabId);
     }
     this._debuggee = { };
     this._mainContextId = null;
-    this.clearTracking();
   }
 
   close(message: string): void {
@@ -212,13 +220,71 @@ export class RelayConnection {
   }
 
   clearTracking(): void {
-    this._consoleMessages = [];
-    this._networkRequests = [];
+    // Clear all tabs' data
+    this._consoleMessages.clear();
+    this._networkRequests.clear();
     this._requestsMap.clear();
   }
 
+  // Clear tracking data for a specific tab
+  clearTabTracking(tabId: number): void {
+    this._consoleMessages.delete(tabId);
+    this._networkRequests.delete(tabId);
+    // Note: _requestsMap is not tab-specific, so we don't clear it here
+  }
+
+  // Clean up tracking data for tabs that no longer exist
+  async cleanupStaleTabData(): Promise<void> {
+    try {
+      // Get all tracked tab IDs
+      const trackedTabIds = new Set([
+        ...this._consoleMessages.keys(),
+        ...this._networkRequests.keys()
+      ]);
+
+      if (trackedTabIds.size === 0) {
+        return; // Nothing to clean up
+      }
+
+      // Check which tabs still exist
+      const openTabIds = new Set<number>();
+      try {
+        const tabs = await chrome.tabs.query({});
+        for (const tab of tabs) {
+          if (tab.id !== undefined) {
+            openTabIds.add(tab.id);
+          }
+        }
+      } catch (error) {
+        debugLog('Error querying tabs for cleanup:', error);
+        return; // Don't clean up if we can't verify tab state
+      }
+
+      // Remove data for tabs that no longer exist
+      let cleaned = 0;
+      for (const tabId of trackedTabIds) {
+        if (!openTabIds.has(tabId)) {
+          this.clearTabTracking(tabId);
+          cleaned++;
+          debugLog(`Cleaned up stale data for closed tab ${tabId}`);
+        }
+      }
+
+      if (cleaned > 0) {
+        debugLog(`Cleanup: Removed data for ${cleaned} closed tab(s)`);
+      }
+    } catch (error) {
+      debugLog('Error during stale tab cleanup:', error);
+    }
+  }
+
   getConsoleMessages(): Array<{ type: string; text: string; timestamp: number; url?: string; lineNumber?: number }> {
-    return this._consoleMessages.slice(); // Return a copy
+    const tabId = this._debuggee.tabId;
+    if (!tabId) {
+      return []; // No tab attached
+    }
+    const messages = this._consoleMessages.get(tabId) || [];
+    return messages.slice(); // Return a copy
   }
 
   getNetworkRequests(): Array<{
@@ -233,7 +299,12 @@ export class RelayConnection {
     responseHeaders?: Record<string, string>;
     requestBody?: string;
   }> {
-    return this._networkRequests.slice(); // Return a copy
+    const tabId = this._debuggee.tabId;
+    if (!tabId) {
+      return []; // No tab attached
+    }
+    const requests = this._networkRequests.get(tabId) || [];
+    return requests.slice(); // Return a copy
   }
 
   async getResponseBody(requestId: string): Promise<{ body?: string; base64Encoded?: boolean; error?: string }> {
@@ -260,9 +331,20 @@ export class RelayConnection {
     if (this._closed)
       return;
     this._closed = true;
+
+    // Stop periodic cleanup
+    if (this._cleanupInterval) {
+      clearInterval(this._cleanupInterval);
+      this._cleanupInterval = undefined;
+    }
+
     chrome.debugger.onEvent.removeListener(this._eventListener);
     chrome.debugger.onDetach.removeListener(this._detachListener);
     chrome.debugger.detach(this._debuggee).catch(() => {});
+
+    // Clean up all tracking data when connection closes
+    this.clearTracking();
+
     this.onclose?.();
   }
 
@@ -338,27 +420,37 @@ export class RelayConnection {
 
     // Capture console messages (unless in stealth mode)
     if (method === 'Runtime.consoleAPICalled' && !this._stealthMode) {
-      const args = params.args || [];
-      const textParts = args.map((arg: any) => arg.value || arg.description || String(arg)).join(' ');
-      this._consoleMessages.push({
-        type: params.type || 'log',
-        text: textParts,
-        timestamp: params.timestamp || Date.now(),
-        url: params.stackTrace?.callFrames?.[0]?.url,
-        lineNumber: params.stackTrace?.callFrames?.[0]?.lineNumber,
-      });
+      const tabId = this._debuggee.tabId;
+      if (tabId) {
+        const args = params.args || [];
+        const textParts = args.map((arg: any) => arg.value || arg.description || String(arg)).join(' ');
+        const messages = this._consoleMessages.get(tabId) || [];
+        messages.push({
+          type: params.type || 'log',
+          text: textParts,
+          timestamp: params.timestamp || Date.now(),
+          url: params.stackTrace?.callFrames?.[0]?.url,
+          lineNumber: params.stackTrace?.callFrames?.[0]?.lineNumber,
+        });
+        this._consoleMessages.set(tabId, messages);
+      }
     }
 
     // Capture runtime exceptions
     if (method === 'Runtime.exceptionThrown' && !this._stealthMode) {
-      const exception = params.exceptionDetails;
-      this._consoleMessages.push({
-        type: 'error',
-        text: exception?.text || exception?.exception?.description || 'Unknown error',
-        timestamp: exception?.timestamp || Date.now(),
-        url: exception?.url,
-        lineNumber: exception?.lineNumber,
-      });
+      const tabId = this._debuggee.tabId;
+      if (tabId) {
+        const exception = params.exceptionDetails;
+        const messages = this._consoleMessages.get(tabId) || [];
+        messages.push({
+          type: 'error',
+          text: exception?.text || exception?.exception?.description || 'Unknown error',
+          timestamp: exception?.timestamp || Date.now(),
+          url: exception?.url,
+          lineNumber: exception?.lineNumber,
+        });
+        this._consoleMessages.set(tabId, messages);
+      }
     }
 
     // Capture network requests
@@ -376,10 +468,12 @@ export class RelayConnection {
 
     // Capture network responses
     if (method === 'Network.responseReceived') {
+      const tabId = this._debuggee.tabId;
       const requestData = this._requestsMap.get(params.requestId);
-      if (requestData) {
+      if (requestData && tabId) {
         const response = params.response;
-        this._networkRequests.push({
+        const requests = this._networkRequests.get(tabId) || [];
+        requests.push({
           requestId: params.requestId,
           url: requestData.url,
           method: requestData.method,
@@ -391,6 +485,7 @@ export class RelayConnection {
           responseHeaders: response.headers,
           requestBody: requestData.requestBody,
         });
+        this._networkRequests.set(tabId, requests);
       }
     }
 
@@ -423,6 +518,8 @@ export class RelayConnection {
         const isAutomatable = tab.url && !['chrome:', 'edge:', 'devtools:', 'chrome-extension:'].some(scheme => tab.url!.startsWith(scheme));
         if (!isAutomatable) {
           console.error(`[Extension] Tab ${tabId} has non-automatable URL (${tab.url}), cannot reattach. Clearing tab attachment but keeping connection alive.`);
+          // Clean up tracking data for this tab
+          this.clearTabTracking(tabId);
           this._debuggee = { };
           return;
         }
@@ -499,6 +596,10 @@ export class RelayConnection {
     // DON'T close WebSocket connection - just clear the tab attachment
     // Extension should remain connected and operational for tab management commands
     console.error(`[Extension] Clearing tab attachment but keeping connection alive`);
+
+    // Clean up tracking data for this tab
+    this.clearTabTracking(tabId);
+
     this._debuggee = { };
   }
 
