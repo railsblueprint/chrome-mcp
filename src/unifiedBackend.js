@@ -196,8 +196,8 @@ class UnifiedBackend {
                     items: { type: 'string' },
                     description: 'File paths to upload (for file_upload action)'
                   },
-                  x: { type: 'number', description: 'X coordinate (for mouse_move, mouse_click, scroll_to, scroll_by)' },
-                  y: { type: 'number', description: 'Y coordinate (for mouse_move, mouse_click, scroll_to, scroll_by)' },
+                  x: { type: 'number', description: 'X coordinate in viewport coordinates (for mouse_move, mouse_click, scroll_to, scroll_by). Use viewport size, NOT screenshot pixel dimensions!' },
+                  y: { type: 'number', description: 'Y coordinate in viewport coordinates (for mouse_move, mouse_click, scroll_to, scroll_by). Use viewport size, NOT screenshot pixel dimensions!' },
                   button: {
                     type: 'string',
                     enum: ['left', 'right', 'middle'],
@@ -1972,6 +1972,16 @@ class UnifiedBackend {
     const format = args.type || 'jpeg';  // Default to JPEG for smaller file size
     const quality = args.quality !== undefined ? args.quality : 80;  // Default quality 80
 
+    // Get viewport info and pixel ratio
+    const viewportInfo = await this._transport.sendCommand('forwardCDPCommand', {
+      method: 'Runtime.evaluate',
+      params: {
+        expression: '({width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio})',
+        returnByValue: true
+      }
+    });
+    const viewport = viewportInfo.result?.value || {};
+
     // For full-page screenshots, scroll to top first to ensure sticky elements are positioned correctly
     if (args.fullPage) {
       await this._transport.sendCommand('forwardCDPCommand', {
@@ -2010,10 +2020,16 @@ class UnifiedBackend {
       const fs = require('fs');
       fs.writeFileSync(args.path, buffer);
 
+      const viewportStr = viewport.width && viewport.height ? `\nViewport: ${viewport.width}x${viewport.height}` : '';
+      const pixelRatioStr = viewport.devicePixelRatio ? `\nDevice Pixel Ratio: ${viewport.devicePixelRatio}x` : '';
+      const coordWarning = viewport.devicePixelRatio > 1
+        ? `\n\n⚠️ **Important:** When clicking coordinates from this screenshot, use viewport coordinates (${viewport.width}x${viewport.height}), NOT screenshot coordinates (${dimensions.width}x${dimensions.height})!`
+        : '';
+
       return {
         content: [{
           type: 'text',
-          text: `### Screenshot Saved\n\nFile: ${args.path}\nFormat: ${format.toUpperCase()}\nDimensions: ${dimensions.width}x${dimensions.height}\nSize: ${sizeKB.toFixed(2)} KB${args.fullPage ? '\nType: Full page' : '\nType: Viewport only'}`
+          text: `### Screenshot Saved\n\nFile: ${args.path}\nFormat: ${format.toUpperCase()}\nScreenshot Dimensions: ${dimensions.width}x${dimensions.height}${viewportStr}${pixelRatioStr}\nSize: ${sizeKB.toFixed(2)} KB${args.fullPage ? '\nType: Full page' : '\nType: Viewport only'}${coordWarning}`
         }],
         isError: false
       };
@@ -2024,10 +2040,14 @@ class UnifiedBackend {
     const MAX_DIMENSION = 2000;
 
     if (dimensions.width > MAX_DIMENSION || dimensions.height > MAX_DIMENSION) {
+      const viewportInfo = viewport.width && viewport.height && viewport.devicePixelRatio
+        ? `\n**Viewport:** ${viewport.width}x${viewport.height}\n**Device Pixel Ratio:** ${viewport.devicePixelRatio}x`
+        : '';
+
       return {
         content: [{
           type: 'text',
-          text: `### Screenshot Dimensions Too Large for Inline Display\n\n**Dimensions:** ${dimensions.width}x${dimensions.height} px\n**Limit:** ${MAX_DIMENSION}px (width or height)\n**Size:** ${sizeKB.toFixed(2)} KB\n\n**Images with dimensions exceeding ${MAX_DIMENSION}px cause API communication errors.**\n\n**Solution:** Save to a file instead:\n\`\`\`\nbrowser_take_screenshot path='/path/to/screenshot.${format}' ${args.fullPage ? 'fullPage=true ' : ''}${format === 'jpeg' ? `quality=${quality}` : ''}\n\`\`\`\n\n**Tips to reduce dimensions:**\n- Use viewport only (remove \`fullPage=true\`) - typically 1280x720 or similar\n- Resize browser window to smaller size before screenshot\n- Use \`browser_window action='resize' width=1280 height=720\``
+          text: `### Screenshot Dimensions Too Large for Inline Display\n\n**Screenshot Dimensions:** ${dimensions.width}x${dimensions.height} px${viewportInfo}\n**Limit:** ${MAX_DIMENSION}px (width or height)\n**Size:** ${sizeKB.toFixed(2)} KB\n\n**Images with dimensions exceeding ${MAX_DIMENSION}px cause API communication errors.**\n\n**Solution:** Save to a file instead:\n\`\`\`\nbrowser_take_screenshot path='/path/to/screenshot.${format}' ${args.fullPage ? 'fullPage=true ' : ''}${format === 'jpeg' ? `quality=${quality}` : ''}\n\`\`\`\n\n**Tips to reduce dimensions:**\n- Use viewport only (remove \`fullPage=true\`) - typically 1280x720 or similar\n- Resize browser window to smaller size before screenshot\n- Use \`browser_window action='resize' width=1280 height=720\``
         }],
         isError: true
       };
