@@ -845,6 +845,9 @@ class UnifiedBackend {
     const onError = args.onError || 'stop';
     const results = [];
 
+    // Install/check iframe monitor
+    const iframeChanges = await this._checkIframeChanges();
+
     // Get tabs before interactions to detect new tabs
     const tabsBeforeResult = await this._transport.sendCommand('getTabs', {});
     const tabsBefore = tabsBeforeResult.tabs || [];
@@ -1510,10 +1513,38 @@ class UnifiedBackend {
       });
     }
 
+    // Format iframe changes warning if any
+    let iframeWarning = '';
+    if (iframeChanges && iframeChanges.length > 0) {
+      iframeWarning = '\n\n### ⚠️ IFrame Changes Detected\n\n';
+      iframeChanges.forEach(change => {
+        if (change.type === 'added') {
+          iframeWarning += `**New iframe added:** ${change.src || '(no src)'}\n`;
+          iframeWarning += `  Size: ${change.width}x${change.height} at (${change.x}, ${change.y})\n`;
+          if (change.coversViewport) {
+            iframeWarning += `  ⚠️ **This iframe covers significant viewport area!**\n`;
+          }
+        } else if (change.type === 'resized') {
+          iframeWarning += `**Iframe resized:** ${change.src || '(no src)'}\n`;
+          iframeWarning += `  Old: ${change.oldWidth}x${change.oldHeight}, New: ${change.width}x${change.height}\n`;
+          if (change.coversViewport) {
+            iframeWarning += `  ⚠️ **Now covers significant viewport area!**\n`;
+          }
+        } else if (change.type === 'moved') {
+          iframeWarning += `**Iframe repositioned:** ${change.src || '(no src)'}\n`;
+          iframeWarning += `  From (${change.oldX}, ${change.oldY}) to (${change.x}, ${change.y})\n`;
+          if (change.coversViewport) {
+            iframeWarning += `  ⚠️ **Now covers significant viewport area!**\n`;
+          }
+        }
+        iframeWarning += '\n';
+      });
+    }
+
     return {
       content: [{
         type: 'text',
-        text: `### Interactions Complete\n\nTotal: ${results.length}\nSucceeded: ${successCount}\nFailed: ${errorCount}\n\n${summary}${newTabsInfo}`
+        text: `### Interactions Complete\n\nTotal: ${results.length}\nSucceeded: ${successCount}\nFailed: ${errorCount}\n\n${summary}${newTabsInfo}${iframeWarning}`
       }],
       isError: errorCount > 0
     };
@@ -3270,6 +3301,179 @@ ${clsEmoji} Cumulative Layout Shift (CLS): ${timing.cls?.toFixed(3) || 'N/A'}
     } catch (error) {
       debugLog('Content extraction error:', error);
       throw new Error(`Failed to extract content: ${error.message}`);
+    }
+  }
+
+  /**
+   * Check for iframe changes using MutationObserver
+   * Installs monitor on first call, returns accumulated changes on subsequent calls
+   */
+  async _checkIframeChanges() {
+    try {
+      const result = await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: `
+            (() => {
+              // Install monitor if not present
+              if (!window.__mcpIframeMonitor) {
+                window.__mcpIframeMonitor = {
+                  changes: [],
+                  iframes: new Map(), // Track iframe state: src, width, height, x, y
+
+                  // Initialize tracking for existing iframes
+                  init() {
+                    document.querySelectorAll('iframe').forEach(iframe => {
+                      this.trackIframe(iframe);
+                    });
+                  },
+
+                  // Track an iframe's current state
+                  trackIframe(iframe) {
+                    const rect = iframe.getBoundingClientRect();
+                    const state = {
+                      src: iframe.src || iframe.getAttribute('src') || '(no src)',
+                      width: Math.round(rect.width),
+                      height: Math.round(rect.height),
+                      x: Math.round(rect.x),
+                      y: Math.round(rect.y)
+                    };
+                    this.iframes.set(iframe, state);
+                    return state;
+                  },
+
+                  // Check if iframe covers significant viewport area (>50%)
+                  coversViewport(rect) {
+                    const viewportArea = window.innerWidth * window.innerHeight;
+                    const iframeArea = rect.width * rect.height;
+
+                    // Also check if iframe is positioned to cover viewport
+                    const coversCenterX = rect.x <= window.innerWidth / 2 &&
+                                         (rect.x + rect.width) >= window.innerWidth / 2;
+                    const coversCenterY = rect.y <= window.innerHeight / 2 &&
+                                         (rect.y + rect.height) >= window.innerHeight / 2;
+
+                    return (iframeArea / viewportArea > 0.5) || (coversCenterX && coversCenterY && iframeArea > 100000);
+                  },
+
+                  // Check for size/position changes on existing iframes
+                  checkForChanges() {
+                    this.iframes.forEach((oldState, iframe) => {
+                      if (!document.contains(iframe)) {
+                        // Iframe removed
+                        this.iframes.delete(iframe);
+                        return;
+                      }
+
+                      const rect = iframe.getBoundingClientRect();
+                      const newState = {
+                        src: iframe.src || iframe.getAttribute('src') || '(no src)',
+                        width: Math.round(rect.width),
+                        height: Math.round(rect.height),
+                        x: Math.round(rect.x),
+                        y: Math.round(rect.y)
+                      };
+
+                      // Check for resize
+                      if (newState.width !== oldState.width || newState.height !== oldState.height) {
+                        this.changes.push({
+                          type: 'resized',
+                          src: newState.src,
+                          oldWidth: oldState.width,
+                          oldHeight: oldState.height,
+                          width: newState.width,
+                          height: newState.height,
+                          x: newState.x,
+                          y: newState.y,
+                          coversViewport: this.coversViewport(rect)
+                        });
+                        this.iframes.set(iframe, newState);
+                      }
+                      // Check for repositioning
+                      else if (newState.x !== oldState.x || newState.y !== oldState.y) {
+                        this.changes.push({
+                          type: 'moved',
+                          src: newState.src,
+                          oldX: oldState.x,
+                          oldY: oldState.y,
+                          x: newState.x,
+                          y: newState.y,
+                          width: newState.width,
+                          height: newState.height,
+                          coversViewport: this.coversViewport(rect)
+                        });
+                        this.iframes.set(iframe, newState);
+                      }
+                    });
+                  }
+                };
+
+                // Initialize with existing iframes
+                window.__mcpIframeMonitor.init();
+
+                // Set up MutationObserver for new iframes
+                const observer = new MutationObserver((mutations) => {
+                  mutations.forEach(mutation => {
+                    mutation.addedNodes.forEach(node => {
+                      if (node.tagName === 'IFRAME') {
+                        const rect = node.getBoundingClientRect();
+                        const state = window.__mcpIframeMonitor.trackIframe(node);
+                        window.__mcpIframeMonitor.changes.push({
+                          type: 'added',
+                          src: state.src,
+                          width: state.width,
+                          height: state.height,
+                          x: state.x,
+                          y: state.y,
+                          coversViewport: window.__mcpIframeMonitor.coversViewport(rect)
+                        });
+                      }
+                      // Check child nodes recursively
+                      if (node.querySelectorAll) {
+                        node.querySelectorAll('iframe').forEach(iframe => {
+                          const rect = iframe.getBoundingClientRect();
+                          const state = window.__mcpIframeMonitor.trackIframe(iframe);
+                          window.__mcpIframeMonitor.changes.push({
+                            type: 'added',
+                            src: state.src,
+                            width: state.width,
+                            height: state.height,
+                            x: state.x,
+                            y: state.y,
+                            coversViewport: window.__mcpIframeMonitor.coversViewport(rect)
+                          });
+                        });
+                      }
+                    });
+                  });
+                });
+
+                observer.observe(document.documentElement, {
+                  childList: true,
+                  subtree: true
+                });
+
+                // Also check for resize/reposition periodically (for CSS animations, etc.)
+                setInterval(() => {
+                  window.__mcpIframeMonitor.checkForChanges();
+                }, 1000);
+              }
+
+              // Return and clear accumulated changes
+              const changes = window.__mcpIframeMonitor.changes;
+              window.__mcpIframeMonitor.changes = [];
+              return changes;
+            })()
+          `,
+          returnByValue: true,
+          awaitPromise: false
+        }
+      });
+
+      return result.result?.value || [];
+    } catch (error) {
+      debugLog('Iframe monitoring error:', error);
+      return [];
     }
   }
 

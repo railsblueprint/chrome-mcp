@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>IFrame Test Page</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    h1 {
+      color: #1c75bc;
+    }
+    button {
+      background-color: #1c75bc;
+      color: white;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 5px;
+      font-size: 14px;
+    }
+    button:hover {
+      background-color: #155a91;
+    }
+    .controls {
+      margin: 20px 0;
+      padding: 15px;
+      background-color: #f5f5f5;
+      border-radius: 4px;
+    }
+    iframe {
+      border: 2px solid #1c75bc;
+      margin: 10px 0;
+    }
+    #dynamicIframe {
+      transition: all 0.5s ease;
+    }
+    .fullscreen-iframe {
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      z-index: 9999 !important;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧪 IFrame Test Page</h1>
+  <p>This page tests iframe detection, including dynamic iframes and position/size changes.</p>
+
+  <div class="controls">
+    <h2>Test Controls</h2>
+    <button id="addIframe">Add New IFrame</button>
+    <button id="resizeIframe">Resize Dynamic IFrame</button>
+    <button id="moveIframe">Move Dynamic IFrame</button>
+    <button id="coverViewport">Make IFrame Cover Viewport</button>
+    <button id="removeIframe">Remove IFrame</button>
+  </div>
+
+  <h2>Static IFrame</h2>
+  <iframe id="staticIframe" src="about:blank" width="400" height="200"></iframe>
+
+  <h2>Dynamic IFrame Container</h2>
+  <div id="iframeContainer"></div>
+
+  <h2>Content Below</h2>
+  <p>Some content to push things down...</p>
+  <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
+
+  <script>
+    let iframeCounter = 1;
+
+    document.getElementById('addIframe').addEventListener('click', () => {
+      const iframe = document.createElement('iframe');
+      iframe.id = 'dynamicIframe' + iframeCounter;
+      iframe.src = 'about:blank';
+      iframe.width = '300';
+      iframe.height = '150';
+      document.getElementById('iframeContainer').appendChild(iframe);
+      console.log(`Added iframe: dynamicIframe${iframeCounter}`);
+      iframeCounter++;
+    });
+
+    document.getElementById('resizeIframe').addEventListener('click', () => {
+      const iframe = document.querySelector('#iframeContainer iframe:last-child');
+      if (iframe) {
+        const newWidth = Math.floor(Math.random() * 400) + 200;
+        const newHeight = Math.floor(Math.random() * 300) + 100;
+        iframe.width = newWidth;
+        iframe.height = newHeight;
+        console.log(`Resized iframe to ${newWidth}x${newHeight}`);
+      } else {
+        alert('No dynamic iframe to resize. Add one first!');
+      }
+    });
+
+    document.getElementById('moveIframe').addEventListener('click', () => {
+      const iframe = document.querySelector('#iframeContainer iframe:last-child');
+      if (iframe) {
+        const randomLeft = Math.floor(Math.random() * 200);
+        const randomTop = Math.floor(Math.random() * 100);
+        iframe.style.position = 'relative';
+        iframe.style.left = randomLeft + 'px';
+        iframe.style.top = randomTop + 'px';
+        console.log(`Moved iframe to (${randomLeft}, ${randomTop})`);
+      } else {
+        alert('No dynamic iframe to move. Add one first!');
+      }
+    });
+
+    document.getElementById('coverViewport').addEventListener('click', () => {
+      const iframe = document.querySelector('#iframeContainer iframe:last-child');
+      if (iframe) {
+        iframe.classList.add('fullscreen-iframe');
+        console.log('Made iframe cover viewport');
+
+        // Auto-remove after 3 seconds
+        setTimeout(() => {
+          iframe.classList.remove('fullscreen-iframe');
+          console.log('Removed viewport cover');
+        }, 3000);
+      } else {
+        alert('No dynamic iframe. Add one first!');
+      }
+    });
+
+    document.getElementById('removeIframe').addEventListener('click', () => {
+      const iframe = document.querySelector('#iframeContainer iframe:last-child');
+      if (iframe) {
+        iframe.remove();
+        console.log('Removed last iframe');
+      } else {
+        alert('No dynamic iframe to remove!');
+      }
+    });
+  </script>
+</body>
+</html>
