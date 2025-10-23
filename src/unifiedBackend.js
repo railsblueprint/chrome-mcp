@@ -831,8 +831,9 @@ class UnifiedBackend {
               const matches = [];
 
               for (const el of elements) {
-                const text = el.textContent || el.innerText || '';
-                if (text.includes(searchText)) {
+                const text = (el.textContent || el.innerText || '').trim();
+                const searchTextLower = searchText.trim().toLowerCase();
+                if (text.toLowerCase().includes(searchTextLower)) {
                   const rect = el.getBoundingClientRect();
                   const style = window.getComputedStyle(el);
 
