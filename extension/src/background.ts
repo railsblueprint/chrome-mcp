@@ -61,12 +61,14 @@ class TabShareExtension {
     chrome.storage.onChanged.addListener(this._onStorageChanged.bind(this));
 
     // Handle reconnect alarm (survives service worker suspension)
-    chrome.alarms.onAlarm.addListener((alarm) => {
-      if (alarm.name === 'reconnect') {
-        console.error('[Extension] Reconnect alarm fired - attempting to reconnect...');
-        this._autoConnect();
-      }
-    });
+    if (chrome.alarms) {
+      chrome.alarms.onAlarm.addListener((alarm) => {
+        if (alarm.name === 'reconnect') {
+          console.error('[Extension] Reconnect alarm fired - attempting to reconnect...');
+          this._autoConnect();
+        }
+      });
+    }
 
     // Initialize extension as enabled by default
     chrome.storage.local.get(['extensionEnabled'], (result) => {
@@ -128,7 +130,9 @@ class TabShareExtension {
       console.error(`[Extension] Auto-connect FAILED (attempt #${this._autoConnectAttempts}):`, error.message);
 
       // Keep retrying forever every 1 second using chrome.alarms (survives service worker suspension)
-      chrome.alarms.create('reconnect', { delayInMinutes: 1 / 60 }); // 1 second
+      if (chrome.alarms) {
+        chrome.alarms.create('reconnect', { delayInMinutes: 1 / 60 }); // 1 second
+      }
     }
   }
 
@@ -313,7 +317,9 @@ class TabShareExtension {
         void this._updateGlobalIcon(false);
         this._broadcastStatusChange();
         // Auto-reconnect after connection loss using chrome.alarms (survives service worker suspension)
-        chrome.alarms.create('reconnect', { delayInMinutes: 1 / 60 }); // 1 second
+        if (chrome.alarms) {
+          chrome.alarms.create('reconnect', { delayInMinutes: 1 / 60 }); // 1 second
+        }
       };
     } catch (error: any) {
       await this._setConnectedTabId(null);
