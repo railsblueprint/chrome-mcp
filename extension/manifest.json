@@ -4,6 +4,7 @@
   "version": "1.3.4",
   "description": "Share browser tabs with Blueprint MCP server",
   "permissions": [
+    "alarms",
     "debugger",
     "activeTab",
     "tabs",
