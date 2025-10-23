@@ -19,6 +19,7 @@ import { createRoot } from 'react-dom/client';
 import './popup.css';
 import { config } from '../config';
 import { getUserInfoFromStorage, getDefaultBrowserName } from '../utils/jwt';
+import packageJson from '../../package.json';
 
 const Popup: React.FC = () => {
   const [enabled, setEnabled] = useState<boolean>(true);
@@ -180,7 +181,7 @@ const Popup: React.FC = () => {
       <div className="popup-container">
         <div className="popup-header">
           <img src="/icons/icon-32.png" alt="Blueprint MCP" className="header-icon" />
-          <h1>Blueprint MCP</h1>
+          <h1>Blueprint MCP<span className="version-label">v{packageJson.version}</span></h1>
         </div>
 
         <div className="popup-content">
@@ -234,7 +235,7 @@ const Popup: React.FC = () => {
     <div className="popup-container">
       <div className="popup-header">
         <img src="/icons/icon-32.png" alt="Blueprint MCP" className="header-icon" />
-        <h1>Blueprint MCP</h1>
+        <h1>Blueprint MCP<span className="version-label">v{packageJson.version}</span></h1>
       </div>
 
       <div className="popup-content">

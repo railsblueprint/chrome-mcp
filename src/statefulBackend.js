@@ -104,7 +104,8 @@ class StatefulBackend {
 
     // Mode
     const mode = this._isAuthenticated ? 'PRO' : 'Free';
-    parts.push(`✅ ${mode}`);
+    const version = require('../package.json').version;
+    parts.push(`✅ ${mode} v${version}`);
 
     // Browser - show disconnected status if browser disconnected
     if (this._browserDisconnected) {
