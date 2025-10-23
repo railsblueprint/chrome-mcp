@@ -1810,7 +1810,7 @@ class UnifiedBackend {
     const sizeKB = buffer.length / 1024;
 
     // Check image dimensions to prevent API blocking
-    const sizeOf = require('image-size');
+    const { default: sizeOf } = require('image-size');
     const dimensions = sizeOf(buffer);
 
     // If path is provided, save the screenshot to disk
