@@ -165,7 +165,11 @@ The MCP server provides these tools to AI assistants:
 - `browser_snapshot` - Get accessible page content (recommended for reading pages)
 - `browser_take_screenshot` - Capture visual screenshot
 - `browser_console_messages` - Get browser console logs
-- `browser_network_requests` - Get network activity
+- `browser_network_requests` - Get comprehensive network activity including:
+  - Request/response headers
+  - Request bodies (POST data)
+  - Response bodies (JSON, text, etc.)
+  - HTTP status codes and timing
 - `browser_extract_content` - Extract page content as markdown
 
 ### Interaction

@@ -75,7 +75,18 @@ export class RelayConnection {
   private _accessToken?: string;
   private _stableClientId?: string; // Stable client ID for rolling updates
   private _consoleMessages: Array<{ type: string; text: string; timestamp: number; url?: string; lineNumber?: number }> = [];
-  private _networkRequests: Array<{ requestId: string; url: string; method: string; timestamp: number; statusCode?: number; statusText?: string; type?: string }> = [];
+  private _networkRequests: Array<{
+    requestId: string;
+    url: string;
+    method: string;
+    timestamp: number;
+    statusCode?: number;
+    statusText?: string;
+    type?: string;
+    requestHeaders?: Record<string, string>;
+    responseHeaders?: Record<string, string>;
+    requestBody?: string;
+  }> = [];
   private _requestsMap: Map<string, any> = new Map(); // requestId → request details
   private _executionContexts: Map<number, any> = new Map(); // contextId → context info
   private _mainContextId: number | null = null; // Main page execution context
@@ -197,8 +208,39 @@ export class RelayConnection {
     return this._consoleMessages.slice(); // Return a copy
   }
 
-  getNetworkRequests(): Array<{ requestId: string; url: string; method: string; timestamp: number; statusCode?: number; statusText?: string; type?: string }> {
+  getNetworkRequests(): Array<{
+    requestId: string;
+    url: string;
+    method: string;
+    timestamp: number;
+    statusCode?: number;
+    statusText?: string;
+    type?: string;
+    requestHeaders?: Record<string, string>;
+    responseHeaders?: Record<string, string>;
+    requestBody?: string;
+  }> {
     return this._networkRequests.slice(); // Return a copy
+  }
+
+  async getResponseBody(requestId: string): Promise<{ body?: string; base64Encoded?: boolean; error?: string }> {
+    try {
+      const result = await chrome.debugger.sendCommand(this._debuggee, 'Network.getResponseBody', { requestId }) as { body: string; base64Encoded: boolean } | undefined;
+      if (!result) {
+        return {
+          error: 'No response received from debugger'
+        };
+      }
+      return {
+        body: result.body,
+        base64Encoded: result.base64Encoded
+      };
+    } catch (error: any) {
+      debugLog(`Failed to get response body for ${requestId}:`, error);
+      return {
+        error: error.message || 'Failed to retrieve response body'
+      };
+    }
   }
 
   private _onClose() {
@@ -314,6 +356,8 @@ export class RelayConnection {
         method: request.method,
         timestamp: params.timestamp || Date.now(),
         type: params.type,
+        requestHeaders: request.headers,
+        requestBody: request.postData, // May be undefined
       });
     }
 
@@ -330,6 +374,9 @@ export class RelayConnection {
           statusCode: response.status,
           statusText: response.statusText,
           type: requestData.type,
+          requestHeaders: requestData.requestHeaders,
+          responseHeaders: response.headers,
+          requestBody: requestData.requestBody,
         });
       }
     }
@@ -810,6 +857,11 @@ export class RelayConnection {
       return {
         requests: this.getNetworkRequests(),
       };
+    }
+
+    if (message.method === 'getResponseBody') {
+      const { requestId } = message.params;
+      return await this.getResponseBody(requestId);
     }
 
     if (message.method === 'clearTracking') {

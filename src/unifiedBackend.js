@@ -2225,16 +2225,83 @@ class UnifiedBackend {
       };
     }
 
-    const requestsText = requests.map(req => {
+    // Format requests with full details including headers and response bodies
+    const requestsDetails = [];
+    for (const req of requests) {
       const status = req.statusCode ? `${req.statusCode} ${req.statusText}` : 'Pending';
       const type = req.type ? ` [${req.type}]` : '';
-      return `${req.method} ${req.url}${type}\n  Status: ${status}`;
-    }).join('\n\n');
+
+      let details = `**${req.method} ${req.url}${type}**\nStatus: ${status}`;
+
+      // Add request headers
+      if (req.requestHeaders && Object.keys(req.requestHeaders).length > 0) {
+        const importantHeaders = ['content-type', 'authorization', 'accept', 'user-agent'];
+        const headerLines = Object.entries(req.requestHeaders)
+          .filter(([key]) => importantHeaders.includes(key.toLowerCase()))
+          .map(([key, value]) => `  ${key}: ${value}`)
+          .join('\n');
+        if (headerLines) {
+          details += `\n\nRequest Headers:\n${headerLines}`;
+        }
+      }
+
+      // Add request body if present
+      if (req.requestBody) {
+        try {
+          const parsed = JSON.parse(req.requestBody);
+          details += `\n\nRequest Body:\n\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``;
+        } catch {
+          details += `\n\nRequest Body:\n\`\`\`\n${req.requestBody.substring(0, 500)}${req.requestBody.length > 500 ? '...' : ''}\n\`\`\``;
+        }
+      }
+
+      // Add response headers
+      if (req.responseHeaders && Object.keys(req.responseHeaders).length > 0) {
+        const importantHeaders = ['content-type', 'content-length', 'cache-control', 'set-cookie'];
+        const headerLines = Object.entries(req.responseHeaders)
+          .filter(([key]) => importantHeaders.includes(key.toLowerCase()))
+          .map(([key, value]) => `  ${key}: ${value}`)
+          .join('\n');
+        if (headerLines) {
+          details += `\n\nResponse Headers:\n${headerLines}`;
+        }
+      }
+
+      // Fetch response body if available (only for successful requests)
+      if (req.statusCode && req.statusCode >= 200 && req.statusCode < 300) {
+        try {
+          const bodyResult = await this._transport.sendCommand('getResponseBody', { requestId: req.requestId });
+          if (bodyResult.body && !bodyResult.error) {
+            let body = bodyResult.body;
+            // Decode base64 if needed
+            if (bodyResult.base64Encoded) {
+              body = Buffer.from(body, 'base64').toString('utf-8');
+            }
+
+            // Try to parse as JSON for better formatting
+            try {
+              const parsed = JSON.parse(body);
+              details += `\n\nResponse Body:\n\`\`\`json\n${JSON.stringify(parsed, null, 2).substring(0, 2000)}${JSON.stringify(parsed, null, 2).length > 2000 ? '\n...(truncated)' : ''}\n\`\`\``;
+            } catch {
+              // Not JSON or parse error, show as text (truncated)
+              details += `\n\nResponse Body:\n\`\`\`\n${body.substring(0, 500)}${body.length > 500 ? '\n...(truncated)' : ''}\n\`\`\``;
+            }
+          } else if (bodyResult.error) {
+            details += `\n\n_Response body unavailable: ${bodyResult.error}_`;
+          }
+        } catch (error) {
+          // Silently skip if response body cannot be fetched
+          debugLog(`Could not fetch response body for ${req.requestId}:`, error);
+        }
+      }
+
+      requestsDetails.push(details);
+    }
 
     return {
       content: [{
         type: 'text',
-        text: `### Network Requests\n\nCaptured ${requests.length} request(s):\n\n${requestsText}`
+        text: `### Network Requests\n\nCaptured ${requests.length} request(s):\n\n---\n\n${requestsDetails.join('\n\n---\n\n')}`
       }],
       isError: false
     };
