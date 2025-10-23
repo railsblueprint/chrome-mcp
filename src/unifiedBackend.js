@@ -508,7 +508,7 @@ class UnifiedBackend {
 
         // Network
         case 'browser_network_requests':
-          result = await this._handleNetworkRequests();
+          result = await this._handleNetworkRequests(args);
           break;
 
         // PDF
@@ -2211,7 +2211,22 @@ class UnifiedBackend {
 
   // ==================== NETWORK ====================
 
-  async _handleNetworkRequests() {
+  async _handleNetworkRequests(args = {}) {
+    const action = args.action || 'list';
+
+    // Action: clear
+    if (action === 'clear') {
+      await this._transport.sendCommand('clearTracking');
+      return {
+        content: [{
+          type: 'text',
+          text: `### Network Requests Cleared\n\nAll captured network requests have been cleared from memory.`
+        }],
+        isError: false
+      };
+    }
+
+    // Get requests list
     const result = await this._transport.sendCommand('getNetworkRequests');
     const requests = result.requests || [];
 
@@ -2219,29 +2234,67 @@ class UnifiedBackend {
       return {
         content: [{
           type: 'text',
-          text: `### Network Requests\n\nNo network requests captured yet.`
+          text: `### Network Requests\n\nNo network requests captured yet.\n\n**Tip:** Use \`action='clear'\` to clear history.`
         }],
         isError: false
       };
     }
 
-    // Format requests with full details including headers and response bodies
-    const requestsDetails = [];
-    for (const req of requests) {
+    // Action: list (default - lightweight view)
+    if (action === 'list') {
+      const listItems = requests.map((req, index) => {
+        const status = req.statusCode ? `${req.statusCode} ${req.statusText}` : 'Pending';
+        const type = req.type ? ` [${req.type}]` : '';
+        const timestamp = new Date(req.timestamp).toISOString().split('T')[1].split('.')[0];
+        return `${index}. **${req.method} ${req.url.length > 80 ? req.url.substring(0, 80) + '...' : req.url}**${type}\n   Status: ${status} | Time: ${timestamp} | ID: \`${req.requestId}\``;
+      }).join('\n\n');
+
+      return {
+        content: [{
+          type: 'text',
+          text: `### Network Requests (${requests.length})\n\n${listItems}\n\n**Actions:**\n- \`action='details', requestId='...'\` - Get full details including headers and body\n- \`action='replay', requestId='...'\` - Replay a request\n- \`action='clear'\` - Clear history`
+        }],
+        isError: false
+      };
+    }
+
+    // Action: details - full details for specific request
+    if (action === 'details') {
+      const { requestId, jsonPath } = args;
+      if (!requestId) {
+        return {
+          content: [{
+            type: 'text',
+            text: `### Error\n\nMissing required parameter: \`requestId\`\n\nUse \`action='list'\` to see available request IDs.`
+          }],
+          isError: true
+        };
+      }
+
+      const req = requests.find(r => r.requestId === requestId);
+      if (!req) {
+        return {
+          content: [{
+            type: 'text',
+            text: `### Error\n\nRequest ID \`${requestId}\` not found.\n\nUse \`action='list'\` to see available request IDs.`
+          }],
+          isError: true
+        };
+      }
+
       const status = req.statusCode ? `${req.statusCode} ${req.statusText}` : 'Pending';
       const type = req.type ? ` [${req.type}]` : '';
-
-      let details = `**${req.method} ${req.url}${type}**\nStatus: ${status}`;
+      let details = `### Request Details\n\n**${req.method} ${req.url}${type}**\nStatus: ${status}\nRequest ID: \`${requestId}\``;
 
       // Add request headers
       if (req.requestHeaders && Object.keys(req.requestHeaders).length > 0) {
-        const importantHeaders = ['content-type', 'authorization', 'accept', 'user-agent'];
+        const importantHeaders = ['content-type', 'authorization', 'accept', 'user-agent', 'cookie'];
         const headerLines = Object.entries(req.requestHeaders)
           .filter(([key]) => importantHeaders.includes(key.toLowerCase()))
-          .map(([key, value]) => `  ${key}: ${value}`)
+          .map(([key, value]) => `  ${key}: ${value.length > 100 ? value.substring(0, 100) + '...' : value}`)
           .join('\n');
         if (headerLines) {
-          details += `\n\nRequest Headers:\n${headerLines}`;
+          details += `\n\n**Request Headers:**\n${headerLines}`;
         }
       }
 
@@ -2249,9 +2302,9 @@ class UnifiedBackend {
       if (req.requestBody) {
         try {
           const parsed = JSON.parse(req.requestBody);
-          details += `\n\nRequest Body:\n\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``;
+          details += `\n\n**Request Body:**\n\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``;
         } catch {
-          details += `\n\nRequest Body:\n\`\`\`\n${req.requestBody.substring(0, 500)}${req.requestBody.length > 500 ? '...' : ''}\n\`\`\``;
+          details += `\n\n**Request Body:**\n\`\`\`\n${req.requestBody.substring(0, 1000)}${req.requestBody.length > 1000 ? '\n...(truncated)' : ''}\n\`\`\``;
         }
       }
 
@@ -2260,15 +2313,15 @@ class UnifiedBackend {
         const importantHeaders = ['content-type', 'content-length', 'cache-control', 'set-cookie'];
         const headerLines = Object.entries(req.responseHeaders)
           .filter(([key]) => importantHeaders.includes(key.toLowerCase()))
-          .map(([key, value]) => `  ${key}: ${value}`)
+          .map(([key, value]) => `  ${key}: ${value.length > 100 ? value.substring(0, 100) + '...' : value}`)
           .join('\n');
         if (headerLines) {
-          details += `\n\nResponse Headers:\n${headerLines}`;
+          details += `\n\n**Response Headers:**\n${headerLines}`;
         }
       }
 
-      // Fetch response body if available (only for successful requests)
-      if (req.statusCode && req.statusCode >= 200 && req.statusCode < 300) {
+      // Fetch response body if available
+      if (req.statusCode && req.statusCode >= 200 && req.statusCode < 400) {
         try {
           const bodyResult = await this._transport.sendCommand('getResponseBody', { requestId: req.requestId });
           if (bodyResult.body && !bodyResult.error) {
@@ -2280,30 +2333,159 @@ class UnifiedBackend {
 
             // Try to parse as JSON for better formatting
             try {
-              const parsed = JSON.parse(body);
-              details += `\n\nResponse Body:\n\`\`\`json\n${JSON.stringify(parsed, null, 2).substring(0, 2000)}${JSON.stringify(parsed, null, 2).length > 2000 ? '\n...(truncated)' : ''}\n\`\`\``;
-            } catch {
+              let parsed = JSON.parse(body);
+
+              // Apply JSONPath filter if provided
+              if (jsonPath) {
+                const { JSONPath } = require('jsonpath-plus');
+                const filtered = JSONPath({ path: jsonPath, json: parsed });
+                parsed = filtered;
+                details += `\n\n**Response Body** (filtered with \`${jsonPath}\`):\n\`\`\`json\n${JSON.stringify(parsed, null, 2).substring(0, 5000)}${JSON.stringify(parsed, null, 2).length > 5000 ? '\n...(truncated)' : ''}\n\`\`\``;
+              } else {
+                details += `\n\n**Response Body:**\n\`\`\`json\n${JSON.stringify(parsed, null, 2).substring(0, 5000)}${JSON.stringify(parsed, null, 2).length > 5000 ? '\n...(truncated)' : ''}\n\`\`\``;
+              }
+
+              if (JSON.stringify(parsed, null, 2).length > 5000) {
+                details += `\n\n_Tip: Use \`jsonPath\` parameter to filter large responses (e.g., \`$.data.items[0]\`)_`;
+              }
+            } catch (jsonError) {
               // Not JSON or parse error, show as text (truncated)
-              details += `\n\nResponse Body:\n\`\`\`\n${body.substring(0, 500)}${body.length > 500 ? '\n...(truncated)' : ''}\n\`\`\``;
+              details += `\n\n**Response Body:**\n\`\`\`\n${body.substring(0, 1000)}${body.length > 1000 ? '\n...(truncated)' : ''}\n\`\`\``;
             }
           } else if (bodyResult.error) {
             details += `\n\n_Response body unavailable: ${bodyResult.error}_`;
           }
         } catch (error) {
-          // Silently skip if response body cannot be fetched
+          details += `\n\n_Could not fetch response body: ${error.message}_`;
           debugLog(`Could not fetch response body for ${req.requestId}:`, error);
         }
       }
 
-      requestsDetails.push(details);
+      return {
+        content: [{
+          type: 'text',
+          text: details
+        }],
+        isError: false
+      };
     }
 
+    // Action: replay - replay a captured request
+    if (action === 'replay') {
+      const { requestId } = args;
+      if (!requestId) {
+        return {
+          content: [{
+            type: 'text',
+            text: `### Error\n\nMissing required parameter: \`requestId\`\n\nUse \`action='list'\` to see available request IDs.`
+          }],
+          isError: true
+        };
+      }
+
+      const req = requests.find(r => r.requestId === requestId);
+      if (!req) {
+        return {
+          content: [{
+            type: 'text',
+            text: `### Error\n\nRequest ID \`${requestId}\` not found.\n\nUse \`action='list'\` to see available request IDs.`
+          }],
+          isError: true
+        };
+      }
+
+      try {
+        // Use CDP Fetch domain to replay the request
+        // First enable Fetch domain
+        await this._transport.sendCommand('forwardCDPCommand', {
+          method: 'Fetch.enable',
+          params: {
+            patterns: [{ urlPattern: '*' }]
+          }
+        });
+
+        // Construct the fetch request
+        const fetchParams = {
+          url: req.url,
+          method: req.method,
+          headers: Object.entries(req.requestHeaders || {}).map(([name, value]) => ({ name, value })),
+        };
+
+        if (req.requestBody) {
+          fetchParams.postData = req.requestBody;
+        }
+
+        // Execute using Runtime.evaluate to use fetch API
+        const evalResult = await this._transport.sendCommand('forwardCDPCommand', {
+          method: 'Runtime.evaluate',
+          params: {
+            expression: `
+              (async () => {
+                const response = await fetch(${JSON.stringify(req.url)}, ${JSON.stringify({
+                  method: req.method,
+                  headers: req.requestHeaders,
+                  body: req.requestBody || undefined
+                })});
+                const text = await response.text();
+                return {
+                  status: response.status,
+                  statusText: response.statusText,
+                  headers: Object.fromEntries(response.headers.entries()),
+                  body: text
+                };
+              })()
+            `,
+            awaitPromise: true,
+            returnByValue: true
+          }
+        });
+
+        // Disable Fetch domain
+        await this._transport.sendCommand('forwardCDPCommand', {
+          method: 'Fetch.disable',
+          params: {}
+        });
+
+        if (evalResult.result && evalResult.result.value) {
+          const replay = evalResult.result.value;
+          let resultText = `### Request Replayed\n\n**${req.method} ${req.url}**\n\n**Response:**\nStatus: ${replay.status} ${replay.statusText}`;
+
+          // Try to parse body as JSON
+          try {
+            const parsed = JSON.parse(replay.body);
+            resultText += `\n\n**Body:**\n\`\`\`json\n${JSON.stringify(parsed, null, 2).substring(0, 2000)}${JSON.stringify(parsed, null, 2).length > 2000 ? '\n...(truncated)' : ''}\n\`\`\``;
+          } catch {
+            resultText += `\n\n**Body:**\n\`\`\`\n${replay.body.substring(0, 1000)}${replay.body.length > 1000 ? '\n...(truncated)' : ''}\n\`\`\``;
+          }
+
+          return {
+            content: [{
+              type: 'text',
+              text: resultText
+            }],
+            isError: false
+          };
+        } else {
+          throw new Error('No result from fetch evaluation');
+        }
+      } catch (error) {
+        return {
+          content: [{
+            type: 'text',
+            text: `### Replay Failed\n\nError: ${error.message}\n\n**Possible reasons:**\n- CORS restrictions\n- Authentication required\n- Request parameters changed\n- Network connectivity issues`
+          }],
+          isError: true
+        };
+      }
+    }
+
+    // Unknown action
     return {
       content: [{
         type: 'text',
-        text: `### Network Requests\n\nCaptured ${requests.length} request(s):\n\n---\n\n${requestsDetails.join('\n\n---\n\n')}`
+        text: `### Error\n\nUnknown action: \`${action}\`\n\nAvailable actions: \`list\`, \`details\`, \`replay\`, \`clear\``
       }],
-      isError: false
+      isError: true
     };
   }
 

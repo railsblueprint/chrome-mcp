@@ -165,11 +165,13 @@ The MCP server provides these tools to AI assistants:
 - `browser_snapshot` - Get accessible page content (recommended for reading pages)
 - `browser_take_screenshot` - Capture visual screenshot
 - `browser_console_messages` - Get browser console logs
-- `browser_network_requests` - Get comprehensive network activity including:
-  - Request/response headers
-  - Request bodies (POST data)
-  - Response bodies (JSON, text, etc.)
-  - HTTP status codes and timing
+- `browser_network_requests` - Powerful network monitoring and replay tool with multiple actions:
+  - **List mode** (default): Lightweight overview of all requests (URL, method, status, time)
+  - **Details mode**: Full request/response data for specific request including headers and bodies
+  - **JSONPath filtering**: Query large JSON responses using JSONPath syntax (e.g., `$.data.items[0]`)
+  - **Replay mode**: Re-execute captured requests with original headers and authentication
+  - **Clear mode**: Clear captured history to free memory
+  - Example: `action='details', requestId='12345.67', jsonPath='$.data.users[0]'`
 - `browser_extract_content` - Extract page content as markdown
 
 ### Interaction
