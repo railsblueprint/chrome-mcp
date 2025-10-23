@@ -34,6 +34,7 @@ const Popup: React.FC = () => {
   const [port, setPort] = useState<string>('5555');
   const [connectionStatus, setConnectionStatus] = useState<{ max_connections: number; connections_used: number; connections_to_this_browser: number } | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
+  const [debugMode, setDebugMode] = useState<boolean>(false);
 
   const updateStatus = async () => {
     // Get current tab
@@ -60,23 +61,19 @@ const Popup: React.FC = () => {
   useEffect(() => {
     // Load initial state
     const loadState = async () => {
-      console.log('[Popup] Loading state from storage...');
-      chrome.storage.local.get(['extensionEnabled', 'isPro', 'browserName', 'mcpPort', 'connectionStatus'], (result) => {
-        console.log('[Popup] Storage contents:', result);
+      chrome.storage.local.get(['extensionEnabled', 'isPro', 'browserName', 'mcpPort', 'connectionStatus', 'debugMode'], (result) => {
         setEnabled(result.extensionEnabled !== false); // Default to true
         setIsPro(result.isPro === true); // Default to false
         setBrowserName(result.browserName || getDefaultBrowserName()); // Load or default
         setPort(result.mcpPort || '5555'); // Load port for free users
         setConnectionStatus(result.connectionStatus || null); // Load connection status
-        console.log('[Popup] Set isPro to:', result.isPro === true);
-        console.log('[Popup] Connection status:', result.connectionStatus);
+        setDebugMode(result.debugMode || false); // Load debug mode
       });
 
       // Load email from JWT token
       const userInfo = await getUserInfoFromStorage();
       if (userInfo) {
         setUserEmail(userInfo.email);
-        console.log('[Popup] Loaded email from token:', userInfo.email);
       }
     };
 
@@ -121,7 +118,6 @@ const Popup: React.FC = () => {
         // Update connection status when it changes
         if (changes.connectionStatus) {
           setConnectionStatus(changes.connectionStatus.newValue || null);
-          console.log('[Popup] Connection status updated:', changes.connectionStatus.newValue);
         }
       }
     };
@@ -142,6 +138,9 @@ const Popup: React.FC = () => {
   };
 
   const saveSettings = async () => {
+    // Always save debug mode
+    await chrome.storage.local.set({ debugMode });
+
     if (isPro) {
       // Save browser name for PRO users
       await chrome.storage.local.set({ browserName });
@@ -156,9 +155,10 @@ const Popup: React.FC = () => {
 
   const cancelSettings = () => {
     // Reload original values
-    chrome.storage.local.get(['browserName', 'mcpPort'], (result) => {
+    chrome.storage.local.get(['browserName', 'mcpPort', 'debugMode'], (result) => {
       setBrowserName(result.browserName || getDefaultBrowserName());
       setPort(result.mcpPort || '5555');
+      setDebugMode(result.debugMode || false);
     });
     setShowSettings(false);
   };
@@ -216,6 +216,31 @@ const Popup: React.FC = () => {
                 </p>
               </>
             )}
+
+            <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid #e0e0e0' }}>
+              <label className="settings-label" style={{
+                display: 'flex',
+                alignItems: 'center',
+                cursor: 'pointer',
+                userSelect: 'none'
+              }}>
+                <input
+                  type="checkbox"
+                  checked={debugMode}
+                  onChange={(e) => setDebugMode(e.target.checked)}
+                  style={{
+                    width: '18px',
+                    height: '18px',
+                    marginRight: '10px',
+                    cursor: 'pointer'
+                  }}
+                />
+                <span>Debug Mode</span>
+              </label>
+              <p className="settings-help" style={{ marginTop: '8px', marginLeft: '28px' }}>
+                Enable detailed logging for troubleshooting
+              </p>
+            </div>
           </div>
 
           <div className="settings-actions">

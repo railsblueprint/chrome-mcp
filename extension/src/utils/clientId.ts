@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { debugLog } from '../relayConnection';
+
 /**
  * Generate a stable client ID for this browser instance.
  * The ID is persisted in chrome.storage.local and will be reused across extension reloads.
@@ -24,12 +26,12 @@ export async function getStableClientId(): Promise<string> {
     chrome.storage.local.get(['stableClientId'], (result) => {
       if (result.stableClientId) {
         // Existing stable ID found
-        console.log('[ClientID] Using existing stable client ID:', result.stableClientId);
+        debugLog('[ClientID] Using existing stable client ID:', result.stableClientId);
         resolve(result.stableClientId);
       } else {
         // Generate new stable ID
         const clientId = `chrome-${crypto.randomUUID()}`;
-        console.log('[ClientID] Generated new stable client ID:', clientId);
+        debugLog('[ClientID] Generated new stable client ID:', clientId);
 
         // Persist for future use
         chrome.storage.local.set({ stableClientId: clientId }, () => {
@@ -46,7 +48,7 @@ export async function getStableClientId(): Promise<string> {
  */
 export async function storeExtensionId(extensionId: string): Promise<void> {
   return new Promise((resolve) => {
-    console.log('[ClientID] Storing extension ID from server:', extensionId);
+    debugLog('[ClientID] Storing extension ID from server:', extensionId);
     chrome.storage.local.set({ serverExtensionId: extensionId }, () => {
       resolve();
     });

@@ -17,6 +17,7 @@
 
 import { RelayConnection, debugLog } from './relayConnection';
 import { getUserInfoFromStorage, getDefaultBrowserName, getMillisecondsUntilRefresh, decodeJWT } from './utils/jwt';
+import * as logger from './utils/logger';
 
 type PageMessage = {
   type: 'connectToMCPRelay';
@@ -54,6 +55,8 @@ class TabShareExtension {
   private _tokenRefreshTimer: number | null = null;
 
   constructor() {
+    logger.debug('Service worker starting, registering listeners...');
+
     chrome.tabs.onRemoved.addListener(this._onTabRemoved.bind(this));
     chrome.tabs.onUpdated.addListener(this._onTabUpdated.bind(this));
     chrome.tabs.onActivated.addListener(this._onTabActivated.bind(this));
@@ -62,12 +65,16 @@ class TabShareExtension {
 
     // Handle reconnect alarm (survives service worker suspension)
     if (chrome.alarms) {
+      logger.debug('Registering chrome.alarms.onAlarm listener...');
       chrome.alarms.onAlarm.addListener((alarm) => {
+        logger.debug('Alarm fired:', alarm.name);
         if (alarm.name === 'reconnect') {
-          console.error('[Extension] Reconnect alarm fired - attempting to reconnect...');
+          logger.log('Reconnect alarm fired - attempting to reconnect...');
           this._autoConnect();
         }
       });
+    } else {
+      logger.error('chrome.alarms API not available in constructor!');
     }
 
     // Initialize extension as enabled by default
@@ -89,12 +96,19 @@ class TabShareExtension {
 
   private async _autoConnect(): Promise<void> {
     if (this._autoConnecting) {
-      debugLog('Auto-connect already in progress, skipping');
+      logger.debug('Auto-connect already in progress, skipping');
       return;
     }
 
     this._autoConnecting = true;
     this._autoConnectAttempts++;
+
+    // List all alarms for debugging
+    if (chrome.alarms) {
+      chrome.alarms.getAll((alarms) => {
+        logger.debug('Current alarms:', alarms.map(a => a.name));
+      });
+    }
 
     // Check if user has PRO account with connection URL
     const userInfo = await getUserInfoFromStorage();
@@ -113,7 +127,7 @@ class TabShareExtension {
       mcpRelayUrl = `ws://127.0.0.1:${port}/extension`;
     }
 
-    console.error(`[Extension] Auto-connect attempt #${this._autoConnectAttempts} to ${mcpRelayUrl}`);
+    logger.debug(`Auto-connect attempt #${this._autoConnectAttempts} to ${mcpRelayUrl}`);
 
     try {
       await this._connectToRelay(0, mcpRelayUrl);
@@ -123,15 +137,26 @@ class TabShareExtension {
       this._autoConnectAttempts = 0; // Reset counter on success
       await this._updateGlobalIcon(true);
       this._broadcastStatusChange();
-      console.error('[Extension] Auto-connect SUCCESSFUL');
+      logger.log('Auto-connect SUCCESSFUL');
     } catch (error: any) {
       this._autoConnecting = false;
       await this._updateGlobalIcon(false);
-      console.error(`[Extension] Auto-connect FAILED (attempt #${this._autoConnectAttempts}):`, error.message);
+      logger.log(`Auto-connect FAILED (attempt #${this._autoConnectAttempts}): ${error.message}`);
 
       // Keep retrying forever every 1 second using chrome.alarms (survives service worker suspension)
       if (chrome.alarms) {
-        chrome.alarms.create('reconnect', { delayInMinutes: 1 / 60 }); // 1 second
+        logger.debug('Creating reconnect alarm after auto-connect failure...');
+        chrome.alarms.create('reconnect', { delayInMinutes: 1 / 60 }, () => {
+          chrome.alarms.get('reconnect', (alarm) => {
+            if (alarm) {
+              logger.debug('Reconnect alarm created successfully:', alarm);
+            } else {
+              logger.error('Reconnect alarm was NOT created!');
+            }
+          });
+        });
+      } else {
+        logger.error('chrome.alarms API not available!');
       }
     }
   }
@@ -309,7 +334,7 @@ class TabShareExtension {
       }
 
       this._activeConnection.onclose = () => {
-        console.error('[Extension] Connection closed - auto-reconnecting in 1 second');
+        logger.log('Connection closed - auto-reconnecting in 1 second');
         this._activeConnection = undefined;
         this._stealthMode = null;
         this._projectName = null;
@@ -318,7 +343,19 @@ class TabShareExtension {
         this._broadcastStatusChange();
         // Auto-reconnect after connection loss using chrome.alarms (survives service worker suspension)
         if (chrome.alarms) {
-          chrome.alarms.create('reconnect', { delayInMinutes: 1 / 60 }); // 1 second
+          logger.debug('Creating reconnect alarm...');
+          chrome.alarms.create('reconnect', { delayInMinutes: 1 / 60 }, () => {
+            // Verify alarm was created
+            chrome.alarms.get('reconnect', (alarm) => {
+              if (alarm) {
+                logger.debug('Reconnect alarm created successfully:', alarm);
+              } else {
+                logger.error('Reconnect alarm was NOT created!');
+              }
+            });
+          });
+        } else {
+          logger.error('chrome.alarms API not available!');
         }
       };
     } catch (error: any) {

@@ -18,9 +18,22 @@
 import { getStableClientId, storeExtensionId } from './utils/clientId';
 import { formatAccessibilitySnapshot } from './utils/snapshotFormatter';
 
+let debugModeEnabled = false;
+
+// Initialize debug mode from storage
+chrome.storage.local.get(['debugMode'], (result) => {
+  debugModeEnabled = result.debugMode || false;
+});
+
+// Listen for debug mode changes
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes.debugMode) {
+    debugModeEnabled = changes.debugMode.newValue || false;
+  }
+});
+
 export function debugLog(...args: unknown[]): void {
-  const enabled = true;
-  if (enabled) {
+  if (debugModeEnabled) {
     // eslint-disable-next-line no-console
     console.log('[Extension]', ...args);
   }
@@ -105,10 +118,10 @@ export class RelayConnection {
     this._browserName = browserName;
     this._accessToken = accessToken;
 
-    console.error('[Extension] Setting up WebSocket handlers');
+    debugLog('Setting up WebSocket handlers');
     this._ws.onmessage = this._onMessage.bind(this);
     this._ws.onclose = () => {
-      console.error('[Extension] WebSocket closed');
+      debugLog('WebSocket closed');
       this._onClose();
     };
     this._ws.onerror = (error) => {
@@ -123,8 +136,8 @@ export class RelayConnection {
 
     // In proxy mode: Extension is PASSIVE - wait for proxy to send authenticate request
     // In direct mode: This still works but is legacy (will be replaced by JSON-RPC)
-    console.error('[Extension] Connection established, WebSocket state:', ws.readyState);
-    debugLog('[Extension] Connection established, waiting for authenticate request from proxy');
+    debugLog('Connection established, WebSocket state:', ws.readyState);
+    debugLog('Connection established, waiting for authenticate request from proxy');
   }
 
   // Either setTabId or close is called after creating the connection.
@@ -494,21 +507,17 @@ export class RelayConnection {
   }
 
   private async _onMessageAsync(event: MessageEvent): Promise<void> {
-    // Force log to verify this is being called
-    console.error('[Extension] _onMessageAsync called, data length:', event.data?.length);
+    debugLog('_onMessageAsync called, data length:', event.data?.length);
 
     let message: any;
     try {
       message = JSON.parse(event.data);
-      console.error('[Extension] Parsed message:', message);
+      debugLog('Received message:', message);
     } catch (error: any) {
-      console.error('[Extension] Error parsing message:', error);
       debugLog('Error parsing message:', error);
       this._sendError(-32700, `Error parsing message: ${error.message}`);
       return;
     }
-
-    debugLog('Received message:', message);
 
     // Check if this is a JSON-RPC notification (has "method" but NO "id")
     // Notifications don't require a response
@@ -573,7 +582,7 @@ export class RelayConnection {
       // Ensure result is always set, even if undefined (for JSON-RPC compliance)
       response.result = result !== undefined ? result : {};
 
-      console.error(`[RelayConnection] About to add currentTab, debuggee.tabId=${this._debuggee.tabId}`);
+      debugLog(`About to add currentTab, debuggee.tabId=${this._debuggee.tabId}`);
 
       // Add current tab info to result (not to response itself - that would be non-standard JSON-RPC)
       // Always include currentTab (null if no tab attached) so MCP knows to clear stale state
@@ -591,7 +600,7 @@ export class RelayConnection {
           debugLog('Failed to get current tab info:', error);
           // Tab might have been closed, set to null
           response.result.currentTab = null;
-          console.error(`[RelayConnection] Set currentTab to null due to error getting tab`);
+          debugLog('Set currentTab to null due to error getting tab');
         }
       } else {
         // No tab attached - explicitly set to null so MCP clears its cached state
@@ -608,7 +617,7 @@ export class RelayConnection {
     }
 
     try {
-      console.error(`[RelayConnection] About to send response, result.currentTab: ${response.result?.currentTab}`);
+      debugLog(`About to send response, result.currentTab: ${response.result?.currentTab}`);
       debugLog('Sending response:', JSON.stringify(response).substring(0, 200));
       this._sendMessage(response);
       debugLog('Response sent successfully');
@@ -657,15 +666,31 @@ export class RelayConnection {
   }
 
   private async _handleConnectionStatusNotification(params: any): Promise<void> {
-    debugLog('Received connection_status notification:', params);
+    debugLog('connection_status notification params:', JSON.stringify(params, null, 2));
 
     // Extract project_name from active_connections if available
     if (params.active_connections && params.active_connections.length > 0) {
       const firstConnection = params.active_connections[0];
-      if (firstConnection.project_name && this.onProjectConnected) {
-        debugLog('Project connected from connection_status:', firstConnection.project_name);
-        this.onProjectConnected(firstConnection.project_name);
+      // Try different field names: project_name, mcp_client_id, client_id, clientID, name
+      let projectName = firstConnection.project_name ||
+                        firstConnection.mcp_client_id ||
+                        firstConnection.client_id ||
+                        firstConnection.clientID ||
+                        firstConnection.name;
+
+      // Strip "mcp-" prefix if present
+      if (projectName && projectName.startsWith('mcp-')) {
+        projectName = projectName.substring(4); // Remove "mcp-"
       }
+
+      if (projectName && this.onProjectConnected) {
+        debugLog('Project connected from connection_status:', projectName);
+        this.onProjectConnected(projectName);
+      } else {
+        debugLog('No project name found in connection. firstConnection:', JSON.stringify(firstConnection, null, 2));
+      }
+    } else {
+      debugLog('No active_connections in params');
     }
 
     // Notify the background script about connection status update
@@ -679,8 +704,6 @@ export class RelayConnection {
   }
 
   private async _handleAuthenticatedNotification(params: any): Promise<void> {
-    debugLog('Received authenticated notification:', params);
-
     // Store the extension_id assigned by the server
     if (params.extension_id) {
       await storeExtensionId(params.extension_id);
@@ -1391,10 +1414,10 @@ export class RelayConnection {
   }
 
   private _sendMessage(message: any): void {
-    console.error('[Extension] _sendMessage called, readyState:', this._ws.readyState, 'messageType:', message.method || 'response');
+    debugLog('_sendMessage called, readyState:', this._ws.readyState, 'messageType:', message.method || 'response');
     if (this._ws.readyState === WebSocket.OPEN) {
       const data = JSON.stringify(message);
-      console.error('[Extension] Sending message, length:', data.length);
+      debugLog('Sending message, length:', data.length);
 
       // Warn about large messages (>2MB might cause WebSocket issues)
       if (data.length > 2 * 1024 * 1024) {
@@ -1403,7 +1426,7 @@ export class RelayConnection {
 
       try {
         this._ws.send(data);
-        console.error('[Extension] Message sent successfully');
+        debugLog('Message sent successfully');
       } catch (error) {
         console.error('[Extension] Failed to send message:', error);
         // Don't close connection on send error - let it be handled by onclose
