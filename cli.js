@@ -16,9 +16,8 @@
  * limitations under the License.
  */
 
-// Load environment variables from .env.local or .env files
-require('dotenv').config({ path: '.env.local' });
-require('dotenv').config(); // Fallback to .env if .env.local doesn't exist
+// Note: Environment variables should be set by the MCP client or system environment
+// No need to load .env files for published MCP servers
 
 // Enable stealth mode patches by default (uses generic names instead of Playwright-specific ones)
 process.env.STEALTH_MODE = 'true';
