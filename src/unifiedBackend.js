@@ -229,14 +229,16 @@ class UnifiedBackend {
       // Screenshot
       {
         name: 'browser_take_screenshot',
-        description: 'Capture screenshot of the page (default: JPEG quality 80, viewport only). Returns image data if no path provided, saves to file if path is specified.',
+        description: 'Capture screenshot of the page (default: JPEG quality 80, viewport only, 1:1 scale). Returns image data if no path provided, saves to file if path is specified.',
         inputSchema: {
           type: 'object',
           properties: {
             type: { type: 'string', enum: ['png', 'jpeg'], description: 'Image format (default: jpeg)' },
             fullPage: { type: 'boolean', description: 'Capture full page (default: false, viewport only)' },
             quality: { type: 'number', description: 'JPEG quality 0-100 (default: 80)' },
-            path: { type: 'string', description: 'Optional: file path to save screenshot. If provided, saves to disk instead of returning image data.' }
+            path: { type: 'string', description: 'Optional: file path to save screenshot. If provided, saves to disk instead of returning image data.' },
+            highlightClickables: { type: 'boolean', description: 'Highlight clickable elements with green border and background (default: false)' },
+            deviceScale: { type: 'number', description: 'Device scale factor for pixel-perfect screenshots (default: 1 for 1:1, use 0 for device native)' }
           }
         }
       },
@@ -2232,6 +2234,8 @@ class UnifiedBackend {
   async _handleScreenshot(args) {
     const format = args.type || 'jpeg';  // Default to JPEG for smaller file size
     const quality = args.quality !== undefined ? args.quality : 80;  // Default quality 80
+    const highlightClickables = args.highlightClickables || false;  // Optional: highlight clickable elements
+    const deviceScale = args.deviceScale !== undefined ? args.deviceScale : 1;  // Default 1:1, use 0 for device native
 
     // Get viewport info and pixel ratio
     const viewportInfo = await this._transport.sendCommand('forwardCDPCommand', {
@@ -2242,6 +2246,71 @@ class UnifiedBackend {
       }
     });
     const viewport = viewportInfo.result?.value || {};
+
+    // Highlight clickable elements if requested
+    if (highlightClickables) {
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: `
+            (() => {
+              // Find all clickable elements
+              const clickableSelectors = [
+                'button',
+                'a[href]',
+                '[onclick]',
+                '[role="button"]',
+                'input[type="button"]',
+                'input[type="submit"]',
+                'input[type="reset"]',
+                '[tabindex]:not([tabindex="-1"])'
+              ];
+
+              const clickables = new Set(document.querySelectorAll(clickableSelectors.join(',')));
+
+              // Filter out hidden clickables
+              const visibleClickables = new Set();
+              clickables.forEach(el => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                if (style.display !== 'none' && style.visibility !== 'hidden' &&
+                    style.opacity !== '0' && rect.width > 0 && rect.height > 0) {
+                  visibleClickables.add(el);
+                }
+              });
+
+              // Create container for clickable highlights
+              const highlightContainer = document.createElement('div');
+              highlightContainer.id = '__mcp_clickable_overlay__';
+              highlightContainer.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 999998;';
+              document.body.appendChild(highlightContainer);
+
+              // Add green border + semi-transparent green highlight to clickables
+              visibleClickables.forEach(el => {
+                const rect = el.getBoundingClientRect();
+                const highlight = document.createElement('div');
+                highlight.className = '__mcp_clickable_marker__';
+                highlight.style.cssText = \`
+                  position: absolute;
+                  left: \${rect.left + window.scrollX}px;
+                  top: \${rect.top + window.scrollY}px;
+                  width: \${rect.width}px;
+                  height: \${rect.height}px;
+                  background: rgba(0, 255, 0, 0.25);
+                  border: 4px solid rgb(0, 200, 0);
+                  box-sizing: border-box;
+                  pointer-events: none;
+                \`;
+                highlightContainer.appendChild(highlight);
+              });
+
+              return visibleClickables.size;
+            })()
+          `,
+          returnByValue: true
+        }
+      });
+    }
 
     // For full-page screenshots, scroll to top first to ensure sticky elements are positioned correctly
     if (args.fullPage) {
@@ -2260,6 +2329,7 @@ class UnifiedBackend {
       });
     }
 
+    // Capture screenshot at device native resolution, we'll downscale locally if needed
     const result = await this._transport.sendCommand('forwardCDPCommand', {
       method: 'Page.captureScreenshot',
       params: {
@@ -2269,28 +2339,65 @@ class UnifiedBackend {
       }
     });
 
-    const buffer = Buffer.from(result.data, 'base64');
-    const sizeKB = buffer.length / 1024;
+    // Remove clickable overlay if it was added
+    if (highlightClickables) {
+      await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: `
+            (() => {
+              const overlay = document.getElementById('__mcp_clickable_overlay__');
+              if (overlay) overlay.remove();
+            })()
+          `,
+          returnByValue: false
+        }
+      });
+    }
 
-    // Check image dimensions to prevent API blocking
+    let buffer = Buffer.from(result.data, 'base64');
+
+    // Check image dimensions
     const { default: sizeOf } = require('image-size');
-    const dimensions = sizeOf(buffer);
+    let dimensions = sizeOf(buffer);
+
+    // Downscale if needed for 1:1 screenshots
+    if (deviceScale > 0 && deviceScale < (viewport.devicePixelRatio || 1) && !args.fullPage) {
+      const sharp = require('sharp');
+      const targetWidth = Math.round(viewport.width * deviceScale);
+      const targetHeight = Math.round(viewport.height * deviceScale);
+
+      buffer = await sharp(buffer)
+        .resize(targetWidth, targetHeight, {
+          fit: 'fill',
+          kernel: 'lanczos3'
+        })
+        .toFormat(format === 'png' ? 'png' : 'jpeg', {
+          quality: format === 'jpeg' ? quality : undefined
+        })
+        .toBuffer();
+
+      dimensions = sizeOf(buffer);
+    }
+
+    const sizeKB = buffer.length / 1024;
 
     // If path is provided, save the screenshot to disk
     if (args.path && result.data) {
       const fs = require('fs');
       fs.writeFileSync(args.path, buffer);
 
+      const actualScale = deviceScale === 0 ? viewport.devicePixelRatio : deviceScale;
       const viewportStr = viewport.width && viewport.height ? `\nViewport: ${viewport.width}x${viewport.height}` : '';
-      const pixelRatioStr = viewport.devicePixelRatio ? `\nDevice Pixel Ratio: ${viewport.devicePixelRatio}x` : '';
-      const coordWarning = viewport.devicePixelRatio > 1
-        ? `\n\n⚠️ **Important:** When clicking coordinates from this screenshot, use viewport coordinates (${viewport.width}x${viewport.height}), NOT screenshot coordinates (${dimensions.width}x${dimensions.height})!`
+      const scaleStr = actualScale ? `\nScale: ${actualScale}x` : '';
+      const coordWarning = actualScale > 1
+        ? `\n\n⚠️ **Important:** When clicking coordinates, use viewport coordinates (${viewport.width}x${viewport.height}), NOT screenshot pixels (${dimensions.width}x${dimensions.height})!`
         : '';
 
       return {
         content: [{
           type: 'text',
-          text: `### Screenshot Saved\n\nFile: ${args.path}\nFormat: ${format.toUpperCase()}\nScreenshot Dimensions: ${dimensions.width}x${dimensions.height}${viewportStr}${pixelRatioStr}\nSize: ${sizeKB.toFixed(2)} KB${args.fullPage ? '\nType: Full page' : '\nType: Viewport only'}${coordWarning}`
+          text: `### Screenshot Saved\n\nFile: ${args.path}\nFormat: ${format.toUpperCase()}\nDimensions: ${dimensions.width}x${dimensions.height}${viewportStr}${scaleStr}\nSize: ${sizeKB.toFixed(2)} KB\nType: ${args.fullPage ? 'Full page' : 'Viewport only'}${coordWarning}`
         }],
         isError: false
       };
