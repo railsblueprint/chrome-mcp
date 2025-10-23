@@ -1,6 +1,6 @@
 {
   "name": "@railsblueprint/chrome-mcp",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "MCP server for Chrome browser automation using real browser profiles",
   "repository": {
     "type": "git",
