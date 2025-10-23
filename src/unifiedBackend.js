@@ -812,10 +812,10 @@ class UnifiedBackend {
   }
 
   /**
-   * Find element and return its coordinates
-   * Handles both regular CSS selectors and :has-text() pseudo-selectors
+   * Find all matching elements with visibility information
+   * Returns array of {x, y, visible, reason} objects
    */
-  async _findElement(selectorOrObj) {
+  async _findAllElements(selectorOrObj) {
     // Handle :has-text() selector
     if (typeof selectorOrObj === 'object' && selectorOrObj.type === 'has-text') {
       const result = await this._transport.sendCommand('forwardCDPCommand', {
@@ -826,22 +826,48 @@ class UnifiedBackend {
               const baseSelector = ${JSON.stringify(selectorOrObj.baseSelector)};
               const searchText = ${JSON.stringify(selectorOrObj.searchText)};
               const elements = document.querySelectorAll(baseSelector);
+              const matches = [];
 
               for (const el of elements) {
                 const text = el.textContent || el.innerText || '';
                 if (text.includes(searchText)) {
                   const rect = el.getBoundingClientRect();
-                  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                  const style = window.getComputedStyle(el);
+
+                  // Check visibility
+                  let visible = true;
+                  let reason = '';
+
+                  if (style.display === 'none') {
+                    visible = false;
+                    reason = 'display: none';
+                  } else if (style.visibility === 'hidden') {
+                    visible = false;
+                    reason = 'visibility: hidden';
+                  } else if (style.opacity === '0') {
+                    visible = false;
+                    reason = 'opacity: 0';
+                  } else if (rect.width === 0 || rect.height === 0) {
+                    visible = false;
+                    reason = 'zero size';
+                  }
+
+                  matches.push({
+                    x: rect.left + rect.width / 2,
+                    y: rect.top + rect.height / 2,
+                    visible: visible,
+                    reason: reason
+                  });
                 }
               }
-              return null;
+              return matches;
             })()
           `,
           returnByValue: true
         }
       });
 
-      return result.result?.value || null;
+      return result.result?.value || [];
     }
 
     // Handle regular CSS selector
@@ -850,17 +876,89 @@ class UnifiedBackend {
       params: {
         expression: `
           (() => {
-            const el = document.querySelector(${JSON.stringify(selectorOrObj)});
-            if (!el) return null;
-            const rect = el.getBoundingClientRect();
-            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+            const elements = document.querySelectorAll(${JSON.stringify(selectorOrObj)});
+            const matches = [];
+
+            for (const el of elements) {
+              const rect = el.getBoundingClientRect();
+              const style = window.getComputedStyle(el);
+
+              // Check visibility
+              let visible = true;
+              let reason = '';
+
+              if (style.display === 'none') {
+                visible = false;
+                reason = 'display: none';
+              } else if (style.visibility === 'hidden') {
+                visible = false;
+                reason = 'visibility: hidden';
+              } else if (style.opacity === '0') {
+                visible = false;
+                reason = 'opacity: 0';
+              } else if (rect.width === 0 || rect.height === 0) {
+                visible = false;
+                reason = 'zero size';
+              }
+
+              matches.push({
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2,
+                visible: visible,
+                reason: reason
+              });
+            }
+            return matches;
           })()
         `,
         returnByValue: true
       }
     });
 
-    return result.result?.value || null;
+    return result.result?.value || [];
+  }
+
+  /**
+   * Find element and return its coordinates (prioritizes visible elements)
+   * Handles both regular CSS selectors and :has-text() pseudo-selectors
+   * Returns: { x, y, warning } or null
+   */
+  async _findElement(selectorOrObj) {
+    const matches = await this._findAllElements(selectorOrObj);
+
+    if (matches.length === 0) {
+      return null;
+    }
+
+    // Prioritize visible elements
+    const visibleMatches = matches.filter(m => m.visible);
+    const hiddenMatches = matches.filter(m => !m.visible);
+
+    let warning = '';
+    if (matches.length > 1) {
+      warning = `Found ${matches.length} matching elements`;
+      if (visibleMatches.length > 0 && hiddenMatches.length > 0) {
+        warning += ` (${visibleMatches.length} visible, ${hiddenMatches.length} hidden)`;
+      }
+      if (visibleMatches.length > 1) {
+        warning += `. Clicked first visible element.`;
+      } else if (visibleMatches.length === 1) {
+        warning += `. Clicked the visible one.`;
+      } else {
+        warning += `. All hidden - clicked first one (${matches[0].reason}).`;
+      }
+    } else if (matches.length === 1 && !matches[0].visible) {
+      warning = `Element is hidden (${matches[0].reason})`;
+    }
+
+    // Use first visible element, or first element if all hidden
+    const selectedMatch = visibleMatches.length > 0 ? visibleMatches[0] : matches[0];
+
+    return {
+      x: selectedMatch.x,
+      y: selectedMatch.y,
+      warning: warning
+    };
   }
 
   /**
@@ -1009,7 +1107,7 @@ class UnifiedBackend {
               throw new Error(`Element not found: ${action.selector}`);
             }
 
-            const { x, y } = elemResult;
+            const { x, y, warning } = elemResult;
             const button = action.button || 'left';
 
             // Click at coordinates
@@ -1034,6 +1132,9 @@ class UnifiedBackend {
             });
 
             result = `Clicked ${action.selector}`;
+            if (warning) {
+              result += ` ⚠️ ${warning}`;
+            }
             break;
           }
 
@@ -1170,7 +1271,7 @@ class UnifiedBackend {
               throw new Error(`Element not found: ${action.selector}`);
             }
 
-            const { x, y } = elemResult;
+            const { x, y, warning } = elemResult;
 
             // Move mouse
             await this._transport.sendCommand('forwardCDPCommand', {
@@ -1182,6 +1283,9 @@ class UnifiedBackend {
             });
 
             result = `Hovered over ${action.selector}`;
+            if (warning) {
+              result += ` ⚠️ ${warning}`;
+            }
             break;
           }
 
