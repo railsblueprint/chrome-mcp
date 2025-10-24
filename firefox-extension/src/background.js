@@ -1001,12 +1001,17 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// Track if we're currently reconnecting to prevent infinite loops
+let isReconnecting = false;
+
 // Listen for storage changes (login/logout)
 browser.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'local') {
-    // If tokens or isPro changed, reconnect
-    if (changes.accessToken || changes.refreshToken || changes.isPro) {
-      console.log('[Firefox MCP] Authentication status changed, reconnecting...');
+    // Only reconnect when user explicitly logs in/out (accessToken/refreshToken change)
+    // Don't reconnect on isPro changes (those are set by autoConnect itself)
+    if ((changes.accessToken || changes.refreshToken) && !isReconnecting) {
+      console.log('[Firefox MCP] User login/logout detected, reconnecting...');
+      isReconnecting = true;
 
       // Close existing connection
       if (socket) {
@@ -1016,7 +1021,11 @@ browser.storage.onChanged.addListener((changes, areaName) => {
       }
 
       // Reconnect with new auth status
-      setTimeout(() => autoConnect(), 1000);
+      setTimeout(() => {
+        autoConnect().finally(() => {
+          isReconnecting = false;
+        });
+      }, 1000);
     }
   }
 });
