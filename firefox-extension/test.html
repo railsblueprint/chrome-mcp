@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Browser Interaction Test Page</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      padding: 20px;
+      max-width: 1200px;
+      margin: 0 auto;
+      background-color: #f5f5f5;
+    }
+    h1 {
+      color: #1c75bc;
+      border-bottom: 2px solid #1c75bc;
+      padding-bottom: 10px;
+    }
+    .test-section {
+      background: white;
+      padding: 20px;
+      margin: 20px 0;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .test-section h2 {
+      color: #2c5060;
+      margin-top: 0;
+    }
+    .form-group {
+      margin: 15px 0;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    textarea,
+    select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    button {
+      background-color: #1c75bc;
+      color: white;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin: 5px;
+    }
+    button:hover {
+      background-color: #155a91;
+    }
+    .hover-test {
+      padding: 20px;
+      background-color: #f0f0f0;
+      border: 2px solid #ddd;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    .hover-test:hover {
+      background-color: #1c75bc;
+      color: white;
+      border-color: #1c75bc;
+    }
+    .click-area {
+      display: inline-block;
+      padding: 15px 30px;
+      background-color: #2c5060;
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 10px;
+    }
+    .click-area:active {
+      transform: scale(0.95);
+    }
+    .mouse-coordinates {
+      padding: 20px;
+      background-color: #e8f4f8;
+      border: 2px dashed #1c75bc;
+      min-height: 200px;
+      position: relative;
+      cursor: crosshair;
+    }
+    .target-dot {
+      width: 20px;
+      height: 20px;
+      background-color: #ff4444;
+      border-radius: 50%;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .result-log {
+      background-color: #f9f9f9;
+      border: 1px solid #ddd;
+      padding: 15px;
+      margin-top: 15px;
+      border-radius: 4px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .hidden-element {
+      display: none;
+      padding: 15px;
+      background-color: #d4edda;
+      border: 1px solid #c3e6cb;
+      border-radius: 4px;
+      color: #155724;
+    }
+    .hidden-element.visible {
+      display: block;
+    }
+    .checkbox-group,
+    .radio-group {
+      margin: 10px 0;
+    }
+    .checkbox-group label,
+    .radio-group label {
+      display: inline-block;
+      margin-right: 15px;
+      font-weight: normal;
+    }
+    #coord-display {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 5px 10px;
+      border-radius: 3px;
+      font-size: 12px;
+    }
+    .scrollable-container {
+      width: 100%;
+      max-width: 500px;
+      height: 200px;
+      border: 2px solid #1c75bc;
+      overflow: auto;
+      margin: 15px 0;
+      padding: 15px;
+      background-color: #f9f9f9;
+      border-radius: 4px;
+    }
+    .scrollable-content {
+      height: 800px;
+      width: 100%;
+    }
+    .scroll-section {
+      margin-bottom: 1000px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧪 Browser Interaction Test Page</h1>
+  <p>This page provides various elements to test all browser interaction types.</p>
+
+  <!-- Form Inputs Section -->
+  <div class="test-section">
+    <h2>📝 Form Inputs (type, press_key)</h2>
+    <form id="test-form" method="POST" enctype="multipart/form-data">
+      <div class="form-group">
+        <label for="username">Username:</label>
+        <input type="text" id="username" name="username" placeholder="Enter username">
+      </div>
+
+      <div class="form-group">
+        <label for="email">Email:</label>
+        <input type="email" id="email" name="email" placeholder="user@example.com">
+      </div>
+
+      <div class="form-group">
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password" placeholder="Enter password">
+      </div>
+
+      <div class="form-group">
+        <label for="country">Country:</label>
+        <select id="country" name="country">
+          <option value="">Select a country</option>
+          <option value="us">United States</option>
+          <option value="uk">United Kingdom</option>
+          <option value="ca">Canada</option>
+          <option value="au">Australia</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="bio">Bio:</label>
+        <textarea id="bio" name="bio" rows="4" placeholder="Tell us about yourself..."></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="avatar">Avatar (single file):</label>
+        <input type="file" id="avatar" name="avatar" accept="image/*">
+      </div>
+
+      <div class="form-group">
+        <label for="documents">Documents (multiple files):</label>
+        <input type="file" id="documents" name="documents" multiple>
+      </div>
+
+      <div class="checkbox-group">
+        <label>
+          <input type="checkbox" id="terms" name="terms" value="accepted">
+          I accept the terms and conditions
+        </label>
+      </div>
+
+      <div class="radio-group">
+        <label>Subscription:</label><br>
+        <label>
+          <input type="radio" name="subscription" value="free" id="sub-free">
+          Free
+        </label>
+        <label>
+          <input type="radio" name="subscription" value="pro" id="sub-pro">
+          Pro
+        </label>
+        <label>
+          <input type="radio" name="subscription" value="enterprise" id="sub-enterprise">
+          Enterprise
+        </label>
+      </div>
+
+      <button type="submit" id="submit-btn">Submit Form</button>
+      <button type="reset" id="reset-btn">Reset</button>
+    </form>
+  </div>
+
+  <!-- Click Testing Section -->
+  <div class="test-section">
+    <h2>🖱️ Click Testing (click)</h2>
+    <div class="click-area" id="click-target-1">Click Me #1</div>
+    <div class="click-area" id="click-target-2">Click Me #2</div>
+    <div class="click-area" id="click-target-3">Click Me #3</div>
+    <button id="show-hidden">Show Hidden Element</button>
+    <div id="hidden-msg" class="hidden-element">🎉 You found the hidden element!</div>
+  </div>
+
+  <!-- Hover Testing Section -->
+  <div class="test-section">
+    <h2>👆 Hover Testing (hover)</h2>
+    <div class="hover-test" id="hover-target">
+      Hover over me to change my appearance
+    </div>
+  </div>
+
+  <!-- Mouse Coordinates Section -->
+  <div class="test-section">
+    <h2>🎯 Mouse Coordinates (mouse_move, mouse_click)</h2>
+    <div class="mouse-coordinates" id="coord-area">
+      <div id="coord-display">X: 0, Y: 0</div>
+      <div class="target-dot" id="target-dot"></div>
+      <p style="text-align: center; margin-top: 80px;">
+        Move mouse or click the red dot
+      </p>
+    </div>
+  </div>
+
+  <!-- Wait Testing Section -->
+  <div class="test-section">
+    <h2>⏱️ Wait Testing (wait)</h2>
+    <button id="delayed-show">Show Element After 2s</button>
+    <div id="delayed-element" class="hidden-element">
+      ⏰ This element appeared after a delay!
+    </div>
+  </div>
+
+  <!-- Scroll Testing Section -->
+  <div class="test-section">
+    <h2>📜 Scroll Testing (scroll_to, scroll_by, scroll_into_view)</h2>
+    <p>This page has both window scrolling and element-specific scrollable containers.</p>
+
+    <h3>Scrollable Container #1</h3>
+    <div id="scroll-container-1" class="scrollable-container">
+      <div class="scrollable-content">
+        <p><strong>Container 1:</strong> This is a scrollable div with lots of content...</p>
+        <p>Scroll down to see more content. You can use:</p>
+        <ul>
+          <li><code>scroll_by</code> with <code>selector: "#scroll-container-1"</code> and <code>y: 100</code></li>
+          <li><code>scroll_to</code> with <code>selector: "#scroll-container-1"</code> and <code>y: 500</code></li>
+        </ul>
+        <p>Line 5</p>
+        <p>Line 6</p>
+        <p>Line 7</p>
+        <p>Line 8</p>
+        <p>Line 9</p>
+        <p>Line 10</p>
+        <p>Line 11</p>
+        <p>Line 12</p>
+        <p>Line 13</p>
+        <p>Line 14</p>
+        <p>Line 15</p>
+        <p>🎯 You've reached the end!</p>
+      </div>
+    </div>
+
+    <h3>Scrollable Container #2</h3>
+    <div id="scroll-container-2" class="scrollable-container">
+      <div class="scrollable-content">
+        <p><strong>Container 2:</strong> Another scrollable container...</p>
+        <p>This one can be scrolled independently from Container #1.</p>
+        <p>Line 3</p>
+        <p>Line 4</p>
+        <p>Line 5</p>
+        <p>Line 6</p>
+        <p>Line 7</p>
+        <p>Line 8</p>
+        <p>Line 9</p>
+        <p>Line 10</p>
+        <p>Line 11</p>
+        <p>Line 12</p>
+        <p>🏁 End of container 2</p>
+      </div>
+    </div>
+
+    <p><strong>Tip:</strong> When you try to scroll without a selector (window scroll),
+    the system will detect and report all scrollable areas on the page!</p>
+  </div>
+
+  <!-- Page Scroll Section (makes page itself scrollable) -->
+  <div class="scroll-section">
+    <div class="test-section">
+      <h2>⬇️ Page Content Section 1</h2>
+      <p>This section makes the entire page scrollable. Try scrolling the window without a selector:</p>
+      <ul>
+        <li><code>scroll_by</code> with <code>y: 500</code> (no selector)</li>
+        <li><code>scroll_to</code> with <code>y: 1000</code> (no selector)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scroll-section">
+    <div class="test-section">
+      <h2>⬇️ Page Content Section 2</h2>
+      <p>More content down here to make the page vertically scrollable...</p>
+    </div>
+  </div>
+
+  <div class="scroll-section">
+    <div class="test-section">
+      <h2>⬇️ Page Content Section 3</h2>
+      <p>Even more content at the bottom of the page...</p>
+    </div>
+  </div>
+
+  <!-- Selector Suggestions Testing Section -->
+  <div class="test-section">
+    <h2>💡 Selector Suggestions Testing (:has-text fallback)</h2>
+    <p>This section tests the "Did you mean?" feature when selectors fail.</p>
+    <p><strong>Test case:</strong> Try clicking <code>button:has-text('Submit')</code></p>
+    <p>There's no <code>&lt;button&gt;</code> element with "Submit" text, but there are other elements:</p>
+
+    <div style="margin: 20px 0; padding: 15px; background-color: #f0f8ff; border-left: 4px solid #1c75bc;">
+      <a href="#" class="btn primary" id="submit-link">Submit Form</a>
+      <div role="button" class="btn-submit action" id="submit-div">Submit Now</div>
+      <span class="link-submit" id="submit-span">Submit Here</span>
+      <button type="submit" id="submit-hidden" style="display: none;">Submit Hidden</button>
+    </div>
+
+    <p><strong>Expected behavior:</strong></p>
+    <ul>
+      <li>❌ <code>button:has-text('Submit')</code> fails (no visible button)</li>
+      <li>💡 Shows "Did you mean?" with actual alternatives:
+        <ul>
+          <li><code>a.btn.primary:has-text('Submit')</code> ✓</li>
+          <li><code>div.btn-submit.action:has-text('Submit')</code> ✓</li>
+          <li><code>span.link-submit:has-text('Submit')</code> ✓</li>
+          <li><code>button[type=submit]:has-text('Submit')</code> ✗ (hidden)</li>
+        </ul>
+      </li>
+    </ul>
+
+    <p><strong>Working selectors to test:</strong></p>
+    <ul>
+      <li><code>a:has-text('Submit')</code> - finds the link</li>
+      <li><code>div[role="button"]:has-text('Submit')</code> - finds the div</li>
+      <li><code>:has-text('Submit')</code> - finds first match (the link)</li>
+    </ul>
+  </div>
+
+  <!-- Result Log -->
+  <div class="test-section">
+    <h2>📋 Event Log</h2>
+    <div class="result-log" id="event-log">
+      <div>Event log ready...</div>
+    </div>
+    <button id="clear-log">Clear Log</button>
+  </div>
+
+  <script src="test-interactions.js"></script>
+</body>
+</html>
