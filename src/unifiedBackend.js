@@ -2320,11 +2320,21 @@ class UnifiedBackend {
     }
 
     const formatted = result.formattedSnapshot;
-    debugLog(`Received formatted snapshot: ${formatted.totalLines} lines, truncated: ${formatted.truncated}`);
 
-    // Convert structured JSON to plain text
-    const snapshot = this._formatStructuredSnapshot(formatted.nodes);
-    const truncationMessage = formatted.truncated ? `\n\n--- ${formatted.truncationMessage} ---` : '';
+    // Check if snapshot is pre-formatted (Firefox) or structured (Chrome)
+    let snapshot;
+    let truncationMessage = '';
+
+    if (formatted.preFormatted) {
+      // Firefox: already formatted as text
+      snapshot = formatted.text;
+      debugLog(`Received pre-formatted snapshot`);
+    } else {
+      // Chrome: structured nodes that need formatting
+      debugLog(`Received formatted snapshot: ${formatted.totalLines} lines, truncated: ${formatted.truncated}`);
+      snapshot = this._formatStructuredSnapshot(formatted.nodes);
+      truncationMessage = formatted.truncated ? `\n\n--- ${formatted.truncationMessage} ---` : '';
+    }
 
     return {
       content: [{

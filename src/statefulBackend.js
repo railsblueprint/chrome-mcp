@@ -142,6 +142,10 @@ class StatefulBackend {
             client_id: {
               type: 'string',
               description: 'Human-readable identifier for this MCP client (e.g., "my-project", "task-automation"). Used for stable connection IDs and reconnection after restarts.'
+            },
+            force_free: {
+              type: 'boolean',
+              description: 'Force free mode (local standalone) even if PRO authentication tokens are present. Default: false.'
             }
           },
           required: ['client_id']
@@ -291,6 +295,13 @@ class StatefulBackend {
     await this._ensureAuthChecked();
 
     debugLog('[StatefulBackend] Attempting to connect...');
+
+    // Check for force_free flag (overrides authentication)
+    const forceFree = args.force_free === true;
+    if (forceFree) {
+      debugLog('[StatefulBackend] force_free=true, forcing free mode (standalone)');
+      return await this._becomePrimary();
+    }
 
     // Check if user has invalid token (authenticated but missing connectionUrl)
     if (this._isAuthenticated && !this._userInfo?.connectionUrl) {

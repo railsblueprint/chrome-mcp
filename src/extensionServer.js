@@ -25,6 +25,14 @@ class ExtensionServer {
     this.onReconnect = null; // Callback when extension reconnects (replaces old connection)
     this.onTabInfoUpdate = null; // Callback when tab info changes (for status header updates)
     this._clientId = null; // MCP client_id to display in extension
+    this._browserType = 'chrome'; // Browser type: 'chrome' or 'firefox'
+  }
+
+  /**
+   * Get browser type
+   */
+  getBrowserType() {
+    return this._browserType;
   }
 
   /**
@@ -123,6 +131,14 @@ class ExtensionServer {
             pending.resolve(message.result);
           }
         }
+        return;
+      }
+
+      // Handle handshake from extension
+      if (message.type === 'handshake') {
+        debugLog('Handshake received:', message);
+        this._browserType = message.browser || 'chrome';
+        debugLog(`Browser type detected: ${this._browserType}`);
         return;
       }
 

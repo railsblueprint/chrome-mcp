@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Blueprint MCP</title>
+  <style>
+    body {
+      width: 300px;
+      padding: 20px;
+      font-family: Arial, sans-serif;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0 0 10px 0;
+      color: #1c75bc;
+    }
+    .status {
+      padding: 10px;
+      background: #f0f0f0;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+    .connected {
+      color: #28a745;
+    }
+    .disconnected {
+      color: #dc3545;
+    }
+  </style>
+</head>
+<body>
+  <h1>Blueprint MCP for Firefox</h1>
+  <div class="status">
+    <div>Status: <span id="status" class="disconnected">Disconnected</span></div>
+    <div>Browser: Firefox</div>
+    <div>Version: 1.0.0</div>
+  </div>
+  <p style="font-size: 12px; color: #666;">
+    This extension connects to the MCP server running on your machine.
+  </p>
+</body>
+</html>
