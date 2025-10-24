@@ -9,6 +9,7 @@ let attachedTabId = null; // Currently attached tab ID
 let attachedTabInfo = null; // Currently attached tab info {id, title, url}
 let projectName = null; // MCP project name from client_id
 let pendingDialogResponse = null; // Stores response for next dialog (accept, text)
+let consoleMessages = []; // Stores console messages from the page
 
 // Auto-connect to MCP server on startup
 async function autoConnect() {
@@ -117,6 +118,13 @@ async function handleCommand(message) {
     case 'closeTab':
       return await handleCloseTab();
 
+    case 'getConsoleMessages':
+      return await handleGetConsoleMessages();
+
+    case 'clearConsoleMessages':
+      consoleMessages = [];
+      return { success: true };
+
     default:
       throw new Error(`Unknown command: ${method}`);
   }
@@ -170,6 +178,9 @@ async function handleCreateTab(params) {
     url: tab.url
   };
 
+  // Inject console capture
+  await injectConsoleCapture(tab.id);
+
   return { tab: { id: tab.id, title: tab.title, url: tab.url } };
 }
 
@@ -206,6 +217,9 @@ async function handleSelectTab(params) {
     title: selectedTab.title,
     url: selectedTab.url
   };
+
+  // Inject console capture
+  await injectConsoleCapture(selectedTab.id);
 
   return { tab: { id: selectedTab.id, title: selectedTab.title, url: selectedTab.url } };
 }
@@ -677,7 +691,66 @@ async function handleCloseTab() {
   return { success: true };
 }
 
-// Handle messages from popup
+// Handle getConsoleMessages command
+async function handleGetConsoleMessages() {
+  return {
+    messages: consoleMessages.slice() // Return copy
+  };
+}
+
+// Inject console capture script into tab
+async function injectConsoleCapture(tabId) {
+  try {
+    await browser.tabs.executeScript(tabId, {
+      code: `
+        // Only inject once
+        if (!window.__blueprintConsoleInjected) {
+          window.__blueprintConsoleInjected = true;
+
+          // Store original console methods
+          const originalConsole = {
+            log: console.log,
+            warn: console.warn,
+            error: console.error,
+            info: console.info,
+            debug: console.debug
+          };
+
+          // Override console methods to capture messages
+          ['log', 'warn', 'error', 'info', 'debug'].forEach(method => {
+            console[method] = function(...args) {
+              // Call original
+              originalConsole[method].apply(console, args);
+
+              // Send to extension
+              const message = {
+                type: 'console',
+                level: method,
+                text: args.map(arg => {
+                  try {
+                    return typeof arg === 'object' ? JSON.stringify(arg) : String(arg);
+                  } catch (e) {
+                    return String(arg);
+                  }
+                }).join(' '),
+                timestamp: Date.now()
+              };
+
+              // Try to send via postMessage (extension will listen)
+              window.postMessage({ __blueprintConsole: message }, '*');
+            };
+          });
+
+          console.log('[Blueprint MCP] Console capture installed');
+        }
+      `
+    });
+  } catch (error) {
+    console.error('[Firefox MCP] Failed to inject console capture:', error);
+  }
+}
+
+// Handle messages from popup and content scripts
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'getStatus') {
     sendResponse({
@@ -685,6 +758,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       attachedTab: attachedTabInfo,
       projectName: projectName
     });
+  } else if (message.type === 'console_message') {
+    // Store console message from content script
+    consoleMessages.push(message.data);
+    // Keep only last 100 messages
+    if (consoleMessages.length > 100) {
+      consoleMessages.shift();
+    }
   }
 });
 
