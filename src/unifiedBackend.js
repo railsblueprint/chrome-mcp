@@ -226,6 +226,26 @@ class UnifiedBackend {
         inputSchema: { type: 'object', properties: {} }
       },
 
+      // Lookup elements
+      {
+        name: 'browser_lookup',
+        description: 'Search for elements by text content and return their selectors and details. Useful for finding the right selector before clicking. Works like the "Did you mean?" feature but returns results directly instead of failing first.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            text: {
+              type: 'string',
+              description: 'Text to search for in elements'
+            },
+            limit: {
+              type: 'number',
+              description: 'Maximum number of results to return (default: 10)'
+            }
+          },
+          required: ['text']
+        }
+      },
+
       // Screenshot
       {
         name: 'browser_take_screenshot',
@@ -581,6 +601,10 @@ class UnifiedBackend {
 
         case 'browser_extract_content':
           result = await this._handleExtractContent(args);
+          break;
+
+        case 'browser_lookup':
+          result = await this._handleLookup(args);
           break;
 
         default:
@@ -965,6 +989,111 @@ class UnifiedBackend {
   }
 
   /**
+   * Find alternative selectors when original selector fails
+   * For :has-text() selectors, searches for broader matches
+   */
+  async _findAlternativeSelectors(processedSelector, originalSelector) {
+    // Only works for :has-text() selectors with a base selector
+    if (typeof processedSelector !== 'object' || processedSelector.type !== 'has-text') {
+      return [];
+    }
+
+    const { searchText, baseSelector } = processedSelector;
+
+    // If base selector is already '*', no broader search possible
+    if (baseSelector === '*') {
+      return [];
+    }
+
+    // Search for any element containing the text (using broader :has-text)
+    const broaderSelector = { type: 'has-text', baseSelector: '*', searchText };
+    const matches = await this._findAllElements(broaderSelector);
+
+    if (matches.length === 0) {
+      return [];
+    }
+
+    // Get actual selectors for each match
+    const result = await this._transport.sendCommand('forwardCDPCommand', {
+      method: 'Runtime.evaluate',
+      params: {
+        expression: `
+          (() => {
+            const searchText = ${JSON.stringify(searchText)};
+            const searchTextLower = searchText.trim().toLowerCase();
+            const elements = document.querySelectorAll('*');
+            const alternatives = [];
+
+            for (const el of elements) {
+              // Get direct text content (not including children)
+              let directText = '';
+              for (const node of el.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                  directText += node.textContent;
+                }
+              }
+              directText = directText.trim();
+
+              // Only match if the direct text contains the search text
+              if (directText.toLowerCase().includes(searchTextLower)) {
+                // Generate a meaningful selector for this element
+                let selector = el.tagName.toLowerCase();
+
+                // Add ID if present
+                if (el.id) {
+                  selector += '#' + el.id;
+                }
+                // Or add classes (up to 2 most specific)
+                else if (el.className && typeof el.className === 'string') {
+                  const classes = el.className.trim().split(/\\s+/).filter(c => c);
+                  if (classes.length > 0) {
+                    selector += '.' + classes.slice(0, 2).join('.');
+                  }
+                }
+                // Or add role if present
+                else if (el.getAttribute('role')) {
+                  selector += '[role="' + el.getAttribute('role') + '"]';
+                }
+
+                // Check visibility
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                const visible = style.display !== 'none' &&
+                               style.visibility !== 'hidden' &&
+                               style.opacity !== '0' &&
+                               rect.width > 0 && rect.height > 0;
+
+                alternatives.push({
+                  selector: selector,
+                  visible: visible,
+                  text: directText.length > 50 ? directText.substring(0, 50) + '...' : directText
+                });
+              }
+            }
+
+            // Return up to 5 alternatives, prioritize visible ones
+            const visibleAlts = alternatives.filter(a => a.visible);
+            const hiddenAlts = alternatives.filter(a => !a.visible);
+            const shown = [...visibleAlts.slice(0, 3), ...hiddenAlts.slice(0, 2)];
+
+            return {
+              alternatives: shown,
+              totalCount: alternatives.length
+            };
+          })()
+        `,
+        returnByValue: true
+      }
+    });
+
+    const data = result.result?.value || { alternatives: [], totalCount: 0 };
+    return {
+      alternatives: data.alternatives || [],
+      totalCount: data.totalCount || 0
+    };
+  }
+
+  /**
    * Validate CSS selector - reject common accessibility role names
    */
   /**
@@ -1107,7 +1236,45 @@ class UnifiedBackend {
             const elemResult = await this._findElement(processedSelector);
 
             if (!elemResult) {
-              throw new Error(`Element not found: ${action.selector}`);
+              // Try to find alternative selectors
+              let errorMsg = `Element not found: ${action.selector}`;
+
+              // If it's a :has-text() with a tag selector, search for alternatives
+              if (typeof processedSelector === 'object' && processedSelector.type === 'has-text' &&
+                  processedSelector.baseSelector !== '*') {
+                const result = await this._findAlternativeSelectors(processedSelector, action.selector);
+                const alternatives = result.alternatives;
+                const totalCount = result.totalCount;
+
+                if (alternatives.length > 0) {
+                  errorMsg += `\n\nDid you mean?`;
+                  alternatives.forEach((alt, i) => {
+                    const visibility = alt.visible ? '✓' : '✗ (hidden)';
+                    errorMsg += `\n  ${i + 1}. ${alt.selector}:has-text('${processedSelector.searchText}') ${visibility}`;
+                    if (alt.text) {
+                      errorMsg += `\n     Text: "${alt.text}"`;
+                    }
+                  });
+
+                  // Show count of additional matches if there are more
+                  if (totalCount > alternatives.length) {
+                    const remaining = totalCount - alternatives.length;
+                    errorMsg += `\n  And ${remaining} more...`;
+                  }
+                } else {
+                  errorMsg += `\n\n💡 No elements found with text: "${processedSelector.searchText}"`;
+                }
+
+                errorMsg += `\n\n💡 Other options:`;
+                errorMsg += `\n- Take screenshot with highlightClickables=true to see all clickable elements`;
+                errorMsg += `\n- Use mouse_click action with coordinates if you know the position`;
+              } else {
+                errorMsg += `\n\n💡 Suggestions:`;
+                errorMsg += `\n- Take screenshot with highlightClickables=true to see clickable elements`;
+                errorMsg += `\n- Use browser_snapshot to inspect page structure`;
+              }
+
+              throw new Error(errorMsg);
             }
 
             const { x, y, warning } = elemResult;
@@ -1283,7 +1450,44 @@ class UnifiedBackend {
             const elemResult = await this._findElement(processedSelector);
 
             if (!elemResult) {
-              throw new Error(`Element not found: ${action.selector}`);
+              // Try to find alternative selectors
+              let errorMsg = `Element not found: ${action.selector}`;
+
+              // If it's a :has-text() with a tag selector, search for alternatives
+              if (typeof processedSelector === 'object' && processedSelector.type === 'has-text' &&
+                  processedSelector.baseSelector !== '*') {
+                const result = await this._findAlternativeSelectors(processedSelector, action.selector);
+                const alternatives = result.alternatives;
+                const totalCount = result.totalCount;
+
+                if (alternatives.length > 0) {
+                  errorMsg += `\n\nDid you mean?`;
+                  alternatives.forEach((alt, i) => {
+                    const visibility = alt.visible ? '✓' : '✗ (hidden)';
+                    errorMsg += `\n  ${i + 1}. ${alt.selector}:has-text('${processedSelector.searchText}') ${visibility}`;
+                    if (alt.text) {
+                      errorMsg += `\n     Text: "${alt.text}"`;
+                    }
+                  });
+
+                  // Show count of additional matches if there are more
+                  if (totalCount > alternatives.length) {
+                    const remaining = totalCount - alternatives.length;
+                    errorMsg += `\n  And ${remaining} more...`;
+                  }
+                } else {
+                  errorMsg += `\n\n💡 No elements found with text: "${processedSelector.searchText}"`;
+                }
+
+                errorMsg += `\n\n💡 Other options:`;
+                errorMsg += `\n- Take screenshot with highlightClickables=true to see all elements`;
+              } else {
+                errorMsg += `\n\n💡 Suggestions:`;
+                errorMsg += `\n- Take screenshot with highlightClickables=true to see elements`;
+                errorMsg += `\n- Use browser_snapshot to inspect page structure`;
+              }
+
+              throw new Error(errorMsg);
             }
 
             const { x, y, warning } = elemResult;
@@ -3639,6 +3843,136 @@ ${clsEmoji} Cumulative Layout Shift (CLS): ${timing.cls?.toFixed(3) || 'N/A'}
     } catch (error) {
       debugLog('Content extraction error:', error);
       throw new Error(`Failed to extract content: ${error.message}`);
+    }
+  }
+
+  /**
+   * Lookup elements by text content
+   */
+  async _handleLookup(args) {
+    const searchText = args.text;
+    const limit = args.limit || 10;
+
+    try {
+      // Search for all elements containing the text
+      const result = await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.evaluate',
+        params: {
+          expression: `
+            (() => {
+              const searchText = ${JSON.stringify(searchText)};
+              const searchTextLower = searchText.trim().toLowerCase();
+              const elements = document.querySelectorAll('*');
+              const matches = [];
+
+              for (const el of elements) {
+                // Get direct text content (not including children)
+                let directText = '';
+                for (const node of el.childNodes) {
+                  if (node.nodeType === Node.TEXT_NODE) {
+                    directText += node.textContent;
+                  }
+                }
+                directText = directText.trim();
+
+                // Only match if the direct text contains the search text
+                if (directText.toLowerCase().includes(searchTextLower)) {
+                  // Generate a meaningful selector for this element
+                  let selector = el.tagName.toLowerCase();
+
+                  // Add ID if present
+                  if (el.id) {
+                    selector += '#' + el.id;
+                  }
+                  // Or add classes (up to 2 most specific)
+                  else if (el.className && typeof el.className === 'string') {
+                    const classes = el.className.trim().split(/\\s+/).filter(c => c);
+                    if (classes.length > 0) {
+                      selector += '.' + classes.slice(0, 2).join('.');
+                    }
+                  }
+                  // Or add role if present
+                  else if (el.getAttribute('role')) {
+                    selector += '[role="' + el.getAttribute('role') + '"]';
+                  }
+
+                  // Check visibility
+                  const rect = el.getBoundingClientRect();
+                  const style = window.getComputedStyle(el);
+                  const visible = style.display !== 'none' &&
+                                 style.visibility !== 'hidden' &&
+                                 style.opacity !== '0' &&
+                                 rect.width > 0 && rect.height > 0;
+
+                  // Get tag name
+                  const tag = el.tagName.toLowerCase();
+
+                  matches.push({
+                    selector: selector,
+                    visible: visible,
+                    text: directText.length > 100 ? directText.substring(0, 100) + '...' : directText,
+                    tag: tag,
+                    x: Math.round(rect.left + rect.width / 2),
+                    y: Math.round(rect.top + rect.height / 2)
+                  });
+                }
+              }
+
+              // Return up to limit, prioritize visible ones
+              const visibleMatches = matches.filter(m => m.visible);
+              const hiddenMatches = matches.filter(m => !m.visible);
+              const shown = [...visibleMatches, ...hiddenMatches].slice(0, ${limit});
+
+              return {
+                matches: shown,
+                totalCount: matches.length
+              };
+            })()
+          `,
+          returnByValue: true
+        }
+      });
+
+      const data = result.result?.value || { matches: [], totalCount: 0 };
+      const matches = data.matches || [];
+      const totalCount = data.totalCount || 0;
+
+      if (matches.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: `### No Elements Found\n\nNo elements found with text: "${searchText}"`
+          }],
+          isError: false
+        };
+      }
+
+      let output = `### Found ${totalCount} element(s) with text: "${searchText}"\n\n`;
+      if (matches.length < totalCount) {
+        output += `Showing first ${matches.length}:\n\n`;
+      }
+
+      matches.forEach((match, i) => {
+        const visibility = match.visible ? '✓ visible' : '✗ hidden';
+        output += `${i + 1}. **${match.selector}:has-text('${searchText}')** ${visibility}\n`;
+        output += `   Tag: ${match.tag}\n`;
+        output += `   Text: "${match.text}"\n`;
+        output += `   Position: (${match.x}, ${match.y})\n\n`;
+      });
+
+      if (matches.length < totalCount) {
+        output += `_...and ${totalCount - matches.length} more. Use limit parameter to see more._\n`;
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: output
+        }],
+        isError: false
+      };
+    } catch (error) {
+      throw new Error(`Failed to lookup elements: ${error.message}`);
     }
   }
 

@@ -359,6 +359,41 @@
     </div>
   </div>
 
+  <!-- Selector Suggestions Testing Section -->
+  <div class="test-section">
+    <h2>💡 Selector Suggestions Testing (:has-text fallback)</h2>
+    <p>This section tests the "Did you mean?" feature when selectors fail.</p>
+    <p><strong>Test case:</strong> Try clicking <code>button:has-text('Submit')</code></p>
+    <p>There's no <code>&lt;button&gt;</code> element with "Submit" text, but there are other elements:</p>
+
+    <div style="margin: 20px 0; padding: 15px; background-color: #f0f8ff; border-left: 4px solid #1c75bc;">
+      <a href="#" class="btn primary" id="submit-link">Submit Form</a>
+      <div role="button" class="btn-submit action" id="submit-div">Submit Now</div>
+      <span class="link-submit" id="submit-span">Submit Here</span>
+      <button type="submit" id="submit-hidden" style="display: none;">Submit Hidden</button>
+    </div>
+
+    <p><strong>Expected behavior:</strong></p>
+    <ul>
+      <li>❌ <code>button:has-text('Submit')</code> fails (no visible button)</li>
+      <li>💡 Shows "Did you mean?" with actual alternatives:
+        <ul>
+          <li><code>a.btn.primary:has-text('Submit')</code> ✓</li>
+          <li><code>div.btn-submit.action:has-text('Submit')</code> ✓</li>
+          <li><code>span.link-submit:has-text('Submit')</code> ✓</li>
+          <li><code>button[type=submit]:has-text('Submit')</code> ✗ (hidden)</li>
+        </ul>
+      </li>
+    </ul>
+
+    <p><strong>Working selectors to test:</strong></p>
+    <ul>
+      <li><code>a:has-text('Submit')</code> - finds the link</li>
+      <li><code>div[role="button"]:has-text('Submit')</code> - finds the div</li>
+      <li><code>:has-text('Submit')</code> - finds first match (the link)</li>
+    </ul>
+  </div>
+
   <!-- Result Log -->
   <div class="test-section">
     <h2>📋 Event Log</h2>

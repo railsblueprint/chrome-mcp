@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Blueprint MCP for Chrome",
-  "version": "1.3.12",
+  "version": "1.4.0",
   "description": "Share browser tabs with Blueprint MCP server",
   "permissions": [
     "alarms",
@@ -40,7 +40,9 @@
         "http://localhost:4010/*",
         "https://mcp-for-chrome.railsblueprint.com/*"
       ],
-      "js": ["lib/content-script.iife.js"],
+      "js": [
+        "lib/content-script.iife.js"
+      ],
       "run_at": "document_start"
     }
   ]
