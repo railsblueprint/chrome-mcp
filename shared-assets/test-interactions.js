@@ -119,6 +119,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 2000);
   });
 
+  // Dialog testing
+  document.getElementById('alert-btn').addEventListener('click', () => {
+    alert('This is an alert!');
+    logEvent('Alert dismissed');
+  });
+
+  document.getElementById('confirm-btn').addEventListener('click', () => {
+    const result = confirm('Do you confirm?');
+    logEvent('Confirm result: ' + result);
+    document.getElementById('confirm-result').textContent = result;
+  });
+
+  document.getElementById('prompt-btn').addEventListener('click', () => {
+    const result = prompt('Enter your name:');
+    logEvent('Prompt result: ' + result);
+    document.getElementById('prompt-result').textContent = result || '(cancelled)';
+  });
+
   // Clear log
   document.getElementById('clear-log').addEventListener('click', () => {
     document.getElementById('event-log').innerHTML = '<div>Event log cleared...</div>';

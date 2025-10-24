@@ -399,16 +399,16 @@
     <h2>💬 Dialog Testing (alert, confirm, prompt)</h2>
     <p>Test browser dialogs. Use <code>browser_handle_dialog</code> to auto-respond before clicking.</p>
 
-    <button id="alert-btn" onclick="alert('This is an alert!'); logEvent('Alert dismissed')">
+    <button id="alert-btn">
       Trigger Alert
     </button>
 
-    <button id="confirm-btn" onclick="const result = confirm('Do you confirm?'); logEvent('Confirm result: ' + result); document.getElementById('confirm-result').textContent = result">
+    <button id="confirm-btn">
       Trigger Confirm
     </button>
     <span id="confirm-result" style="margin-left: 10px; font-weight: bold;"></span>
 
-    <button id="prompt-btn" onclick="const result = prompt('Enter your name:'); logEvent('Prompt result: ' + result); document.getElementById('prompt-result').textContent = result || '(cancelled)'">
+    <button id="prompt-btn">
       Trigger Prompt
     </button>
     <span id="prompt-result" style="margin-left: 10px; font-weight: bold;"></span>
