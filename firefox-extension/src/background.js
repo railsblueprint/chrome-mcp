@@ -44,7 +44,7 @@ async function setupDialogOverrides(tabId, accept = true, promptText = '') {
                 response: undefined,
                 timestamp: Date.now()
               });
-              delete window.__blueprintDialogResponse;
+              // Don't delete - keep handling all dialogs
               return undefined;
             }
             return window.__originalAlert.apply(this, args);
@@ -61,7 +61,7 @@ async function setupDialogOverrides(tabId, accept = true, promptText = '') {
                 response: response,
                 timestamp: Date.now()
               });
-              delete window.__blueprintDialogResponse;
+              // Don't delete - keep handling all dialogs
               return response;
             }
             return window.__originalConfirm.apply(this, args);
@@ -82,7 +82,7 @@ async function setupDialogOverrides(tabId, accept = true, promptText = '') {
                 response: response,
                 timestamp: Date.now()
               });
-              delete window.__blueprintDialogResponse;
+              // Don't delete - keep handling all dialogs
               return response;
             }
             return window.__originalPrompt.apply(this, args);
