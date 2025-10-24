@@ -1280,6 +1280,50 @@ class UnifiedBackend {
             const { x, y, warning } = elemResult;
             const button = action.button || 'left';
 
+            // Add visual click effect
+            await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `
+                  (() => {
+                    // Add visual click effect
+                    const marker = document.createElement('div');
+                    marker.style.cssText = \`
+                      position: fixed;
+                      left: \${${x} - 15}px;
+                      top: \${${y} - 15}px;
+                      width: 30px;
+                      height: 30px;
+                      border: 3px solid #ff0000;
+                      border-radius: 50%;
+                      background: rgba(255, 0, 0, 0.2);
+                      pointer-events: none;
+                      z-index: 999999;
+                      animation: clickPulse 0.6s ease-out;
+                    \`;
+
+                    // Add animation if not already present
+                    if (!document.getElementById('__mcp_click_animation__')) {
+                      const style = document.createElement('style');
+                      style.id = '__mcp_click_animation__';
+                      style.textContent = \`
+                        @keyframes clickPulse {
+                          0% { transform: scale(0.5); opacity: 1; }
+                          100% { transform: scale(2); opacity: 0; }
+                        }
+                      \`;
+                      document.head.appendChild(style);
+                    }
+                    document.body.appendChild(marker);
+
+                    // Remove after animation
+                    setTimeout(() => marker.remove(), 600);
+                  })()
+                `,
+                returnByValue: false
+              }
+            });
+
             // Move mouse to element first (some React apps check for mouse movement)
             await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Input.dispatchMouseEvent',
@@ -1289,7 +1333,7 @@ class UnifiedBackend {
               }
             });
 
-            // Small delay to let React process the mouseMoved event
+            // Small delay to let React process the mouseMoved event and show visual effect
             await new Promise(resolve => setTimeout(resolve, 50));
 
             // Click at coordinates
@@ -1561,13 +1605,47 @@ class UnifiedBackend {
           case 'mouse_click': {
             const button = action.button || 'left';
 
-            // First, check what element is at these coordinates
+            // First, check what element is at these coordinates and add visual effect
             const elementAtPoint = await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Runtime.evaluate',
               params: {
                 expression: `
                   (() => {
                     const el = document.elementFromPoint(${action.x}, ${action.y});
+
+                    // Add visual click effect
+                    const marker = document.createElement('div');
+                    marker.style.cssText = \`
+                      position: fixed;
+                      left: \${${action.x} - 15}px;
+                      top: \${${action.y} - 15}px;
+                      width: 30px;
+                      height: 30px;
+                      border: 3px solid #ff0000;
+                      border-radius: 50%;
+                      background: rgba(255, 0, 0, 0.2);
+                      pointer-events: none;
+                      z-index: 999999;
+                      animation: clickPulse 0.6s ease-out;
+                    \`;
+
+                    // Add animation
+                    const style = document.createElement('style');
+                    style.textContent = \`
+                      @keyframes clickPulse {
+                        0% { transform: scale(0.5); opacity: 1; }
+                        100% { transform: scale(2); opacity: 0; }
+                      }
+                    \`;
+                    document.head.appendChild(style);
+                    document.body.appendChild(marker);
+
+                    // Remove after animation
+                    setTimeout(() => {
+                      marker.remove();
+                      style.remove();
+                    }, 600);
+
                     if (!el) return null;
 
                     // Generate a meaningful selector
@@ -1600,6 +1678,9 @@ class UnifiedBackend {
                 returnByValue: true
               }
             });
+
+            // Wait a tiny bit to ensure visual effect shows
+            await new Promise(resolve => setTimeout(resolve, 50));
 
             await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Input.dispatchMouseEvent',
