@@ -6,6 +6,8 @@ console.log('[Firefox MCP] Extension loaded');
 let socket = null;
 let isConnected = false;
 let attachedTabId = null; // Currently attached tab ID
+let attachedTabInfo = null; // Currently attached tab info {id, title, url}
+let projectName = null; // MCP project name from client_id
 
 // Auto-connect to MCP server on startup
 async function autoConnect() {
@@ -34,6 +36,15 @@ async function autoConnect() {
       try {
         const message = JSON.parse(event.data);
         console.log('[Firefox MCP] Received command:', message);
+
+        // Handle notifications (no id, has method)
+        if (!message.id && message.method) {
+          if (message.method === 'authenticated' && message.params?.client_id) {
+            projectName = message.params.client_id;
+            console.log('[Firefox MCP] Project name set:', projectName);
+          }
+          return; // Don't send response for notifications
+        }
 
         const response = await handleCommand(message);
 
@@ -133,6 +144,11 @@ async function handleCreateTab(params) {
 
   // Auto-attach to the new tab
   attachedTabId = tab.id;
+  attachedTabInfo = {
+    id: tab.id,
+    title: tab.title,
+    url: tab.url
+  };
 
   return { tab: { id: tab.id, title: tab.title, url: tab.url } };
 }
@@ -165,6 +181,11 @@ async function handleSelectTab(params) {
 
   // Attach to this tab
   attachedTabId = selectedTab.id;
+  attachedTabInfo = {
+    id: selectedTab.id,
+    title: selectedTab.title,
+    url: selectedTab.url
+  };
 
   return { tab: { id: selectedTab.id, title: selectedTab.title, url: selectedTab.url } };
 }
@@ -289,6 +310,17 @@ async function handleCDPCommand(params) {
       throw new Error(`CDP command not supported in Firefox: ${method}`);
   }
 }
+
+// Handle messages from popup
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'getStatus') {
+    sendResponse({
+      connected: isConnected,
+      attachedTab: attachedTabInfo,
+      projectName: projectName
+    });
+  }
+});
 
 // Start auto-connect
 autoConnect();
