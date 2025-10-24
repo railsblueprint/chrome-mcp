@@ -573,6 +573,21 @@ async function handleCDPCommand(params) {
 
       return {};
 
+    case 'Runtime.getDialogEvents':
+      // Custom CDP command to retrieve dialog events from the page
+      const dialogEventsResult = await browser.tabs.executeScript(attachedTabId, {
+        code: `
+          (function() {
+            const events = window.__blueprintDialogEvents || [];
+            // Clear events after retrieving them
+            window.__blueprintDialogEvents = [];
+            return events;
+          })()
+        `
+      });
+
+      return { events: dialogEventsResult[0] || [] };
+
     case 'Accessibility.getFullAXTree':
       // Firefox doesn't have accessibility tree API, so create a simplified DOM snapshot
       const snapshotResults = await browser.tabs.executeScript(attachedTabId, {
@@ -790,6 +805,16 @@ async function injectConsoleCapture(tabId) {
     console.error('[Firefox MCP] Failed to inject console capture:', error);
   }
 }
+
+// Listen for tab navigation to re-inject dialog overrides on the attached tab
+browser.webNavigation.onCompleted.addListener(async (details) => {
+  // Only re-inject if this is the attached tab and it's the main frame
+  if (details.tabId === attachedTabId && details.frameId === 0) {
+    console.log('[Firefox MCP] Page loaded, re-injecting dialog overrides and console capture');
+    await injectConsoleCapture(details.tabId);
+    await setupDialogOverrides(details.tabId);
+  }
+});
 
 // Handle messages from popup and content scripts
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {

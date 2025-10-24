@@ -2109,10 +2109,42 @@ class UnifiedBackend {
       });
     }
 
+    // Check for dialog events
+    let dialogWarning = '';
+    try {
+      const dialogResult = await this._transport.sendCommand('forwardCDPCommand', {
+        method: 'Runtime.getDialogEvents',
+        params: {}
+      });
+
+      const dialogEvents = dialogResult.events || [];
+      if (dialogEvents.length > 0) {
+        dialogWarning = `\n### ⚠️ Dialogs Auto-Handled\n\n`;
+        dialogWarning += `${dialogEvents.length} dialog(s) were automatically handled during this interaction:\n\n`;
+
+        dialogEvents.forEach((event, i) => {
+          dialogWarning += `**${i + 1}. ${event.type}**\n`;
+          dialogWarning += `   Message: "${event.message}"\n`;
+          if (event.type === 'confirm') {
+            dialogWarning += `   Auto-response: ${event.response ? 'OK' : 'Cancel'}\n`;
+          } else if (event.type === 'prompt') {
+            dialogWarning += `   Auto-response: "${event.response || '(empty)'}"\n`;
+          }
+          dialogWarning += `\n`;
+        });
+
+        dialogWarning += `💡 **Tip:** Use \`browser_handle_dialog\` to customize dialog responses:\n`;
+        dialogWarning += `- To reject: \`browser_handle_dialog(accept=false)\`\n`;
+        dialogWarning += `- For prompts: \`browser_handle_dialog(accept=true, text="your text")\`\n`;
+      }
+    } catch (error) {
+      // Dialog event retrieval not supported or failed - ignore silently
+    }
+
     return {
       content: [{
         type: 'text',
-        text: `### Interactions Complete\n\nTotal: ${results.length}\nSucceeded: ${successCount}\nFailed: ${errorCount}\n\n${summary}${newTabsInfo}${iframeWarning}`
+        text: `### Interactions Complete\n\nTotal: ${results.length}\nSucceeded: ${successCount}\nFailed: ${errorCount}\n\n${summary}${newTabsInfo}${iframeWarning}${dialogWarning}`
       }],
       isError: errorCount > 0
     };
