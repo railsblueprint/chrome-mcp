@@ -2699,10 +2699,11 @@ class UnifiedBackend {
     }
 
     // Return base64 image if no path provided and dimensions are acceptable
+    // Use the processed buffer (not original result.data) in case it was downscaled
     return {
       content: [{
         type: 'image',
-        data: result.data,
+        data: buffer.toString('base64'),
         mimeType: `image/${format}`
       }],
       isError: false
