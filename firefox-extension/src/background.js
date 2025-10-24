@@ -11,6 +11,95 @@ let projectName = null; // MCP project name from client_id
 let pendingDialogResponse = null; // Stores response for next dialog (accept, text)
 let consoleMessages = []; // Stores console messages from the page
 
+// Helper function to set up dialog overrides on a tab
+// This auto-handles alert/confirm/prompt dialogs and logs what happened
+async function setupDialogOverrides(tabId, accept = true, promptText = '') {
+  const dialogResponse = { accept, promptText };
+
+  try {
+    await browser.tabs.executeScript(tabId, {
+      code: `
+        // Set up dialog response in window object
+        window.__blueprintDialogResponse = ${JSON.stringify(dialogResponse)};
+
+        // Initialize dialog event log if not exists
+        if (!window.__blueprintDialogEvents) {
+          window.__blueprintDialogEvents = [];
+        }
+
+        // Store originals only once
+        if (!window.__originalAlert) {
+          window.__originalAlert = window.alert;
+          window.__originalConfirm = window.confirm;
+          window.__originalPrompt = window.prompt;
+
+          // Override with auto-response that checks for pending response
+          window.alert = function(...args) {
+            const message = args[0] || '';
+            if (window.__blueprintDialogResponse) {
+              console.log('[Blueprint MCP] Auto-handled alert:', message);
+              window.__blueprintDialogEvents.push({
+                type: 'alert',
+                message: message,
+                response: undefined,
+                timestamp: Date.now()
+              });
+              delete window.__blueprintDialogResponse;
+              return undefined;
+            }
+            return window.__originalAlert.apply(this, args);
+          };
+
+          window.confirm = function(...args) {
+            const message = args[0] || '';
+            if (window.__blueprintDialogResponse) {
+              const response = window.__blueprintDialogResponse.accept;
+              console.log('[Blueprint MCP] Auto-handled confirm:', message, '- returned:', response);
+              window.__blueprintDialogEvents.push({
+                type: 'confirm',
+                message: message,
+                response: response,
+                timestamp: Date.now()
+              });
+              delete window.__blueprintDialogResponse;
+              return response;
+            }
+            return window.__originalConfirm.apply(this, args);
+          };
+
+          window.prompt = function(...args) {
+            const message = args[0] || '';
+            const defaultValue = args[1] || '';
+            if (window.__blueprintDialogResponse) {
+              const response = window.__blueprintDialogResponse.accept
+                ? window.__blueprintDialogResponse.promptText
+                : null;
+              console.log('[Blueprint MCP] Auto-handled prompt:', message, '- returned:', response);
+              window.__blueprintDialogEvents.push({
+                type: 'prompt',
+                message: message,
+                defaultValue: defaultValue,
+                response: response,
+                timestamp: Date.now()
+              });
+              delete window.__blueprintDialogResponse;
+              return response;
+            }
+            return window.__originalPrompt.apply(this, args);
+          };
+
+          console.log('[Blueprint MCP] Dialog overrides installed (auto-accept)');
+        } else {
+          // Just update the response if already set up
+          console.log('[Blueprint MCP] Dialog response updated');
+        }
+      `
+    });
+  } catch (error) {
+    console.log('[Firefox MCP] Could not inject dialog overrides:', error.message);
+  }
+}
+
 // Auto-connect to MCP server on startup
 async function autoConnect() {
   try {
@@ -178,8 +267,9 @@ async function handleCreateTab(params) {
     url: tab.url
   };
 
-  // Inject console capture
+  // Inject console capture and dialog overrides
   await injectConsoleCapture(tab.id);
+  await setupDialogOverrides(tab.id);
 
   return { tab: { id: tab.id, title: tab.title, url: tab.url } };
 }
@@ -218,8 +308,9 @@ async function handleSelectTab(params) {
     url: selectedTab.url
   };
 
-  // Inject console capture
+  // Inject console capture and dialog overrides
   await injectConsoleCapture(selectedTab.id);
+  await setupDialogOverrides(selectedTab.id);
 
   return { tab: { id: selectedTab.id, title: selectedTab.title, url: selectedTab.url } };
 }
@@ -474,65 +565,11 @@ async function handleCDPCommand(params) {
       return {};
 
     case 'Page.handleJavaScriptDialog':
-      // Store the dialog response for when the next dialog appears
-      pendingDialogResponse = {
-        accept: cdpParams.accept !== false,
-        promptText: cdpParams.promptText || ''
-      };
+      // Update dialog handler with new response settings
+      const accept = cdpParams.accept !== false;
+      const promptText = cdpParams.promptText || '';
 
-      // Inject a script that will handle dialogs automatically
-      // This sets up persistent overrides that will auto-respond to dialogs
-      await browser.tabs.executeScript(attachedTabId, {
-        code: `
-          // Set up dialog response in window object
-          window.__blueprintDialogResponse = ${JSON.stringify(pendingDialogResponse)};
-
-          // Store originals only once
-          if (!window.__originalAlert) {
-            window.__originalAlert = window.alert;
-            window.__originalConfirm = window.confirm;
-            window.__originalPrompt = window.prompt;
-
-            // Override with auto-response that checks for pending response
-            window.alert = function(...args) {
-              if (window.__blueprintDialogResponse) {
-                console.log('[Blueprint MCP] Auto-handled alert');
-                delete window.__blueprintDialogResponse;
-                return undefined;
-              }
-              return window.__originalAlert.apply(this, args);
-            };
-
-            window.confirm = function(...args) {
-              if (window.__blueprintDialogResponse) {
-                const response = window.__blueprintDialogResponse.accept;
-                console.log('[Blueprint MCP] Auto-handled confirm, returning:', response);
-                delete window.__blueprintDialogResponse;
-                return response;
-              }
-              return window.__originalConfirm.apply(this, args);
-            };
-
-            window.prompt = function(...args) {
-              if (window.__blueprintDialogResponse) {
-                const response = window.__blueprintDialogResponse.accept
-                  ? window.__blueprintDialogResponse.promptText
-                  : null;
-                console.log('[Blueprint MCP] Auto-handled prompt, returning:', response);
-                delete window.__blueprintDialogResponse;
-                return response;
-              }
-              return window.__originalPrompt.apply(this, args);
-            };
-
-            'dialog_handler_installed';
-          } else {
-            // Just update the response if already set up
-            console.log('[Blueprint MCP] Dialog handler already installed, updated response');
-            'dialog_response_updated';
-          }
-        `
-      });
+      await setupDialogOverrides(attachedTabId, accept, promptText);
 
       return {};
 
@@ -641,6 +678,10 @@ async function handleOpenTestPage() {
     title: 'Browser Interaction Test Page',
     url: testPageUrl
   };
+
+  // Inject console capture and dialog overrides
+  await injectConsoleCapture(tab.id);
+  await setupDialogOverrides(tab.id);
 
   return { url: testPageUrl, tab: { id: tab.id } };
 }
