@@ -2,18 +2,19 @@
  * Test Interactions Page JavaScript
  */
 
+// Event logger - make it global so inline onclick handlers can access it
+window.logEvent = function(message) {
+  const log = document.getElementById('event-log');
+  const timestamp = new Date().toLocaleTimeString();
+  const entry = document.createElement('div');
+  entry.textContent = `[${timestamp}] ${message}`;
+  entry.style.marginBottom = '5px';
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+};
+
 // Wait for DOM to be ready
 document.addEventListener('DOMContentLoaded', () => {
-  // Event logger
-  function logEvent(message) {
-    const log = document.getElementById('event-log');
-    const timestamp = new Date().toLocaleTimeString();
-    const entry = document.createElement('div');
-    entry.textContent = `[${timestamp}] ${message}`;
-    entry.style.marginBottom = '5px';
-    log.appendChild(entry);
-    log.scrollTop = log.scrollHeight;
-  }
 
   // Form event listeners
   document.getElementById('test-form').addEventListener('submit', async (e) => {
