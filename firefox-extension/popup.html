@@ -7,48 +7,7 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="popup-container">
-    <div class="popup-header">
-      <img src="icons/icon-32.png" alt="Blueprint MCP" class="header-icon" />
-      <h1>Blueprint MCP<span class="version-label" id="version">v1.0.0</span></h1>
-    </div>
-
-    <div class="popup-content">
-      <!-- Status row with animated dot -->
-      <div class="status-row">
-        <span class="status-label">Status:</span>
-        <div class="status-indicator">
-          <span class="status-dot disconnected" id="statusDot"></span>
-          <span class="status-text" id="statusText">Disconnected</span>
-        </div>
-      </div>
-
-      <!-- This tab row -->
-      <div class="status-row">
-        <span class="status-label">This tab:</span>
-        <span class="status-text" id="thisTabText">Not automated</span>
-      </div>
-
-      <!-- Project name row (hidden by default) -->
-      <div class="status-row" id="projectRow" style="display: none;">
-        <span class="status-label"></span>
-        <span class="status-text" id="projectName" style="font-size: 0.9em; color: #666;"></span>
-      </div>
-
-      <!-- Links section -->
-      <div class="links-section">
-        <a href="https://docs.claude.com/en/docs/claude-code/mcp-server-chrome" class="doc-link" target="_blank">
-          Documentation
-        </a>
-        <button class="test-page-link" id="testPageButton">
-          Open Test Page
-        </button>
-        <a href="https://ko-fi.com/railsblueprint" class="beer-link" target="_blank">
-          🍺 Buy me a beer
-        </a>
-      </div>
-    </div>
-  </div>
+  <div id="root"></div>
   <script src="popup.js"></script>
 </body>
 </html>

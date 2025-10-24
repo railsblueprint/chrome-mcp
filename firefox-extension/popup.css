@@ -1,4 +1,18 @@
-/* Blueprint MCP Firefox Extension Popup - matching Chrome design exactly */
+/**
+ * Copyright (c) 404 Software Labs.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 * {
   margin: 0;
@@ -116,15 +130,162 @@ body {
   color: #1a1a1a;
 }
 
+.toggle-row {
+  display: flex;
+  justify-content: center;
+}
+
+.toggle-button {
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 120px;
+}
+
+.toggle-button.enabled {
+  background-color: white;
+  color: #1c75bc;
+  border: 2px solid #1c75bc;
+}
+
+.toggle-button.enabled:hover {
+  background-color: #f0f7fc;
+}
+
+.toggle-button.disabled {
+  background-color: #1c75bc;
+  color: white;
+  border: 2px solid #1c75bc;
+}
+
+.toggle-button.disabled:hover {
+  background-color: #155a94;
+  border-color: #155a94;
+}
+
+.toggle-button:active {
+  transform: scale(0.98);
+}
+
+.pro-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  margin-top: 16px;
+  background: linear-gradient(135deg, #1c75bc 0%, #2c5060 100%);
+  border-radius: 8px;
+}
+
+.pro-section.pro-active {
+  background: white;
+  border: 2px solid #1c75bc;
+  padding: 12px 16px;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pro-text {
+  color: white;
+  font-size: 13px;
+  margin: 0 0 4px 0;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+.pro-section.pro-active .pro-text {
+  color: #1c75bc;
+  margin: 0;
+  font-size: 14px;
+}
+
+.pro-features {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.pro-button {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 12px 20px;
+  background-color: white;
+  color: #1c75bc;
+  text-decoration: none;
+  border: none;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.pro-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.pro-button:active {
+  transform: scale(0.98);
+}
+
+.signin-text {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  text-align: center;
+}
+
+.signin-link {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: none;
+  font-family: inherit;
+  font-weight: 700;
+}
+
+.signin-link:hover {
+  color: white;
+  text-decoration: underline;
+}
+
+.logout-link {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  font-family: inherit;
+}
+
+.logout-link:hover {
+  color: #1c75bc;
+}
+
 .links-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding-top: 12px;
   border-top: 1px solid #e0e0e0;
-  margin-top: 4px;
+  margin-top: 12px;
 }
 
+.settings-link,
 .doc-link,
 .test-page-link,
 .beer-link {
@@ -136,13 +297,25 @@ body {
   border: none;
   cursor: pointer;
   font-family: inherit;
+}
+
+.settings-link {
+  color: #666;
+  background-color: #f5f5f5;
   padding: 8px 12px;
   font-size: 13px;
+}
+
+.settings-link:hover {
+  background-color: #e8e8e8;
+  color: #333;
 }
 
 .doc-link {
   color: #1c75bc;
   background-color: #f0f7fc;
+  padding: 8px 12px;
+  font-size: 13px;
 }
 
 .doc-link:hover {
@@ -153,6 +326,8 @@ body {
 .test-page-link {
   color: #2c5060;
   background-color: #f0f4f5;
+  padding: 8px 12px;
+  font-size: 13px;
 }
 
 .test-page-link:hover {
@@ -173,4 +348,191 @@ body {
   background-color: #155a94;
   box-shadow: 0 4px 12px rgba(28, 117, 188, 0.5);
   transform: translateY(-2px);
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+}
+
+.settings-input {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: monospace;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: #1c75bc;
+}
+
+.settings-help {
+  font-size: 12px;
+  color: #666;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.settings-button {
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.settings-button.save {
+  background-color: #1c75bc;
+  color: white;
+}
+
+.settings-button.save:hover {
+  background-color: #155a94;
+}
+
+.settings-button.cancel {
+  background-color: #f5f5f5;
+  color: #666;
+}
+
+.settings-button.cancel:hover {
+  background-color: #e8e8e8;
+}
+
+.settings-button:active {
+  transform: scale(0.98);
+}
+
+.connect-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid #e0e0e0;
+  border-bottom: 1px solid #e0e0e0;
+  margin: 12px 0;
+}
+
+.connect-label {
+  font-size: 12px;
+  color: #666;
+  font-weight: 500;
+}
+
+.url-input {
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: monospace;
+}
+
+.url-input:focus {
+  outline: none;
+  border-color: #1c75bc;
+}
+
+.connect-button {
+  padding: 8px 16px;
+  background-color: #1c75bc;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.connect-button:hover {
+  background-color: #155a94;
+}
+
+.connect-button:active {
+  transform: scale(0.98);
+}
+
+/* Browser Name Configuration for PRO users */
+.browser-name-config {
+  width: 100%;
+  margin: 12px 0;
+}
+
+.browser-name-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #1c75bc;
+}
+
+.browser-name-input {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.browser-name-input:focus {
+  outline: none;
+  border-color: #1c75bc;
+  box-shadow: 0 0 0 2px rgba(28, 117, 188, 0.1);
+}
+
+.browser-name-help {
+  margin: 4px 0 0 0;
+  font-size: 11px;
+  color: #666;
+  font-weight: normal;
+}
+
+/* PRO email display */
+.pro-email {
+  margin: 4px 0 0 0;
+  font-size: 11px;
+  color: #666;
+  font-weight: normal;
+}
+
+/* Connection status display */
+.connection-status {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.connection-limit,
+.connection-browser {
+  margin: 4px 0;
+  font-size: 11px;
+  color: #666;
+  font-weight: normal;
+}
+
+.connection-limit {
+  font-weight: 500;
+  color: #1c75bc;
 }

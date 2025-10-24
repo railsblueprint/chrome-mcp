@@ -13,6 +13,34 @@ let consoleMessages = []; // Stores console messages from the page
 let networkRequests = []; // Stores network requests for tracking
 let requestIdCounter = 0; // Counter for request IDs
 
+// JWT Decoding utility (without validation - only for extracting claims)
+function decodeJWT(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1]));
+    return payload;
+  } catch (e) {
+    console.log('[Firefox MCP] Failed to decode JWT:', e.message);
+    return null;
+  }
+}
+
+// Get user info from stored JWT
+async function getUserInfoFromStorage() {
+  const result = await browser.storage.local.get(['accessToken']);
+  if (!result.accessToken) return null;
+
+  const payload = decodeJWT(result.accessToken);
+  if (!payload) return null;
+
+  return {
+    email: payload.email || payload.sub || null,
+    sub: payload.sub,
+    connectionUrl: payload.connection_url || null, // PRO mode relay URL
+  };
+}
+
 // Network request tracking using webRequest API
 browser.webRequest.onBeforeRequest.addListener(
   (details) => {
@@ -167,24 +195,47 @@ async function setupDialogOverrides(tabId, accept = true, promptText = '') {
 // Auto-connect to MCP server on startup
 async function autoConnect() {
   try {
-    const result = await browser.storage.local.get(['mcpPort']);
-    const port = result.mcpPort || '5555';
-    const url = `ws://127.0.0.1:${port}/extension`;
+    // Check if user has PRO account with connection URL from JWT
+    const userInfo = await getUserInfoFromStorage();
+    let url;
+    let isPro = false;
 
-    console.log(`[Firefox MCP] Connecting to ${url}...`);
+    if (userInfo && userInfo.connectionUrl) {
+      // PRO user: use connection URL from JWT token
+      url = userInfo.connectionUrl;
+      isPro = true;
+      console.log(`[Firefox MCP] PRO mode: Connecting to relay server ${url}...`);
+
+      // Set isPro flag in storage for popup
+      await browser.storage.local.set({ isPro: true });
+    } else {
+      // Free user: use local port
+      const result = await browser.storage.local.get(['mcpPort']);
+      const port = result.mcpPort || '5555';
+      url = `ws://127.0.0.1:${port}/extension`;
+      console.log(`[Firefox MCP] Free mode: Connecting to ${url}...`);
+
+      // Clear isPro flag in storage
+      await browser.storage.local.set({ isPro: false });
+    }
 
     socket = new WebSocket(url);
 
     socket.onopen = () => {
-      console.log('[Firefox MCP] Connected to MCP server');
+      console.log('[Firefox MCP] Connected');
       isConnected = true;
 
-      // Send handshake with browser type
-      socket.send(JSON.stringify({
-        type: 'handshake',
-        browser: 'firefox',
-        version: browser.runtime.getManifest().version
-      }));
+      // In PRO mode (relay), don't send handshake - wait for authenticate request
+      // In Free mode, send handshake
+      if (!isPro) {
+        socket.send(JSON.stringify({
+          type: 'handshake',
+          browser: 'firefox',
+          version: browser.runtime.getManifest().version
+        }));
+      } else {
+        console.log('[Firefox MCP] PRO mode: Waiting for authenticate request from proxy...');
+      }
     };
 
     socket.onmessage = async (event) => {
@@ -247,6 +298,23 @@ async function handleCommand(message) {
   const { method, params } = message;
 
   switch (method) {
+    case 'authenticate':
+      // PRO mode: Proxy is requesting authentication
+      // Get stored tokens from browser.storage
+      const result = await browser.storage.local.get(['accessToken', 'refreshToken']);
+
+      if (!result.accessToken) {
+        throw new Error('No authentication tokens found. Please login via MCP client first.');
+      }
+
+      console.log('[Firefox MCP] Responding to authenticate request with stored tokens');
+      return {
+        access_token: result.accessToken,
+        refresh_token: result.refreshToken,
+        browser_name: 'Firefox',
+        browser_version: browser.runtime.getManifest().version
+      };
+
     case 'getTabs':
       return await handleGetTabs();
 
@@ -906,12 +974,49 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       attachedTab: attachedTabInfo,
       projectName: projectName
     });
+  } else if (message.type === 'getConnectionStatus') {
+    sendResponse({
+      connected: isConnected,
+      connectedTabId: attachedTabId,
+      stealthMode: null, // Firefox doesn't support stealth mode yet
+      projectName: projectName
+    });
+  } else if (message.type === 'loginSuccess') {
+    // OAuth login completed - store tokens and set isPro flag
+    browser.storage.local.set({
+      accessToken: message.accessToken,
+      refreshToken: message.refreshToken,
+      isPro: true
+    }, () => {
+      sendResponse({ success: true });
+    });
+    return true; // Async response
   } else if (message.type === 'console_message') {
     // Store console message from content script
     consoleMessages.push(message.data);
     // Keep only last 100 messages
     if (consoleMessages.length > 100) {
       consoleMessages.shift();
+    }
+  }
+});
+
+// Listen for storage changes (login/logout)
+browser.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local') {
+    // If tokens or isPro changed, reconnect
+    if (changes.accessToken || changes.refreshToken || changes.isPro) {
+      console.log('[Firefox MCP] Authentication status changed, reconnecting...');
+
+      // Close existing connection
+      if (socket) {
+        socket.close();
+        socket = null;
+        isConnected = false;
+      }
+
+      // Reconnect with new auth status
+      setTimeout(() => autoConnect(), 1000);
     }
   }
 });
