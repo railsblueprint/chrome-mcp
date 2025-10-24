@@ -10,6 +10,70 @@ let attachedTabInfo = null; // Currently attached tab info {id, title, url}
 let projectName = null; // MCP project name from client_id
 let pendingDialogResponse = null; // Stores response for next dialog (accept, text)
 let consoleMessages = []; // Stores console messages from the page
+let networkRequests = []; // Stores network requests for tracking
+let requestIdCounter = 0; // Counter for request IDs
+
+// Network request tracking using webRequest API
+browser.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    const requestId = `${details.requestId}`;
+    networkRequests.push({
+      requestId: requestId,
+      url: details.url,
+      method: details.method,
+      type: details.type,
+      tabId: details.tabId,
+      timestamp: details.timeStamp,
+      statusCode: null,
+      statusText: null,
+      requestHeaders: null,
+      responseHeaders: null,
+      requestBody: details.requestBody
+    });
+
+    // Keep only last 500 requests
+    if (networkRequests.length > 500) {
+      networkRequests.shift();
+    }
+  },
+  { urls: ["<all_urls>"] },
+  ["requestBody"]
+);
+
+browser.webRequest.onCompleted.addListener(
+  (details) => {
+    const request = networkRequests.find(r => r.requestId === `${details.requestId}`);
+    if (request) {
+      request.statusCode = details.statusCode;
+      request.statusText = details.statusLine;
+      request.responseHeaders = details.responseHeaders;
+    }
+  },
+  { urls: ["<all_urls>"] },
+  ["responseHeaders"]
+);
+
+browser.webRequest.onBeforeSendHeaders.addListener(
+  (details) => {
+    const request = networkRequests.find(r => r.requestId === `${details.requestId}`);
+    if (request) {
+      request.requestHeaders = details.requestHeaders;
+    }
+  },
+  { urls: ["<all_urls>"] },
+  ["requestHeaders"]
+);
+
+browser.webRequest.onErrorOccurred.addListener(
+  (details) => {
+    const request = networkRequests.find(r => r.requestId === `${details.requestId}`);
+    if (request) {
+      request.statusCode = 0;
+      request.statusText = details.error || 'Error';
+    }
+  },
+  { urls: ["<all_urls>"] }
+);
 
 // Helper function to set up dialog overrides on a tab
 // This auto-handles alert/confirm/prompt dialogs and logs what happened
@@ -191,6 +255,13 @@ async function handleCommand(message) {
 
     case 'selectTab':
       return await handleSelectTab(params);
+
+    case 'getNetworkRequests':
+      return { requests: networkRequests };
+
+    case 'clearTracking':
+      networkRequests = [];
+      return { success: true };
 
     case 'forwardCDPCommand':
       return await handleCDPCommand(params);
@@ -492,6 +563,11 @@ async function handleCDPCommand(params) {
       await browser.tabs.reload(attachedTabId);
       return {};
 
+    case 'Page.printToPDF':
+      // Firefox WebExtensions don't support PDF generation
+      // Users need to use browser's native print dialog
+      throw new Error('PDF generation not supported in Firefox extension - use browser\'s native print (Ctrl/Cmd+P) instead');
+
     case 'Page.captureScreenshot':
       // Use Firefox tabs.captureTab API
       const dataUrl = await browser.tabs.captureTab(attachedTabId, {
@@ -587,6 +663,12 @@ async function handleCDPCommand(params) {
       });
 
       return { events: dialogEventsResult[0] || [] };
+
+    case 'Performance.getMetrics':
+      // Firefox doesn't have Performance.getMetrics CDP command
+      // Return empty metrics - the actual performance data comes from Runtime.evaluate
+      // which is called separately by unifiedBackend.js
+      return { metrics: [] };
 
     case 'Accessibility.getFullAXTree':
       // Firefox doesn't have accessibility tree API, so create a simplified DOM snapshot

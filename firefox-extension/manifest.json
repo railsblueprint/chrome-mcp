@@ -8,6 +8,7 @@
     "tabs",
     "activeTab",
     "webNavigation",
+    "webRequest",
     "storage",
     "management",
     "<all_urls>"

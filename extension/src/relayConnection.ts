@@ -219,6 +219,100 @@ export class RelayConnection {
     }
   }
 
+  /**
+   * Set up auto-dialog-handling in the attached tab
+   * This auto-handles alert/confirm/prompt dialogs and logs what happened
+   */
+  private async _setupDialogOverrides(accept: boolean = true, promptText: string = ''): Promise<void> {
+    try {
+      const dialogOverrideCode = `
+        // Set up dialog response in window object
+        window.__blueprintDialogResponse = ${JSON.stringify({ accept, promptText })};
+
+        // Initialize dialog event log if not exists
+        if (!window.__blueprintDialogEvents) {
+          window.__blueprintDialogEvents = [];
+        }
+
+        // Store originals only once
+        if (!window.__originalAlert) {
+          window.__originalAlert = window.alert;
+          window.__originalConfirm = window.confirm;
+          window.__originalPrompt = window.prompt;
+
+          // Override with auto-response that checks for pending response
+          window.alert = function(...args) {
+            const message = args[0] || '';
+            if (window.__blueprintDialogResponse) {
+              console.log('[Blueprint MCP] Auto-handled alert:', message);
+              window.__blueprintDialogEvents.push({
+                type: 'alert',
+                message: message,
+                response: undefined,
+                timestamp: Date.now()
+              });
+              // Don't delete - keep handling all dialogs
+              return undefined;
+            }
+            return window.__originalAlert.apply(this, args);
+          };
+
+          window.confirm = function(...args) {
+            const message = args[0] || '';
+            if (window.__blueprintDialogResponse) {
+              const response = window.__blueprintDialogResponse.accept;
+              console.log('[Blueprint MCP] Auto-handled confirm:', message, '- returned:', response);
+              window.__blueprintDialogEvents.push({
+                type: 'confirm',
+                message: message,
+                response: response,
+                timestamp: Date.now()
+              });
+              // Don't delete - keep handling all dialogs
+              return response;
+            }
+            return window.__originalConfirm.apply(this, args);
+          };
+
+          window.prompt = function(...args) {
+            const message = args[0] || '';
+            const defaultValue = args[1] || '';
+            if (window.__blueprintDialogResponse) {
+              const response = window.__blueprintDialogResponse.accept
+                ? window.__blueprintDialogResponse.promptText
+                : null;
+              console.log('[Blueprint MCP] Auto-handled prompt:', message, '- returned:', response);
+              window.__blueprintDialogEvents.push({
+                type: 'prompt',
+                message: message,
+                defaultValue: defaultValue,
+                response: response,
+                timestamp: Date.now()
+              });
+              // Don't delete - keep handling all dialogs
+              return response;
+            }
+            return window.__originalPrompt.apply(this, args);
+          };
+
+          console.log('[Blueprint MCP] Dialog overrides installed (auto-accept)');
+        } else {
+          // Just update the response if already set up
+          console.log('[Blueprint MCP] Dialog response updated');
+        }
+      `;
+
+      await chrome.debugger.sendCommand(this._debuggee, 'Runtime.evaluate', {
+        expression: dialogOverrideCode,
+        returnByValue: false
+      });
+
+      debugLog('Dialog overrides injected successfully');
+    } catch (error) {
+      debugLog('Could not inject dialog overrides:', error);
+    }
+  }
+
   clearTracking(): void {
     // Clear all tabs' data
     this._consoleMessages.clear();
@@ -363,6 +457,12 @@ export class RelayConnection {
       if (!params.frame?.parentId) {
         debugLog('Main frame navigated, clearing console and network tracking');
         this.clearTracking();
+
+        // Re-inject dialog overrides on main frame navigation
+        debugLog('Re-injecting dialog overrides after navigation');
+        this._setupDialogOverrides().catch(error => {
+          debugLog('Failed to re-inject dialog overrides:', error);
+        });
       }
     }
 
@@ -1331,6 +1431,7 @@ export class RelayConnection {
     try {
       await chrome.debugger.attach(this._debuggee, '1.3');
       await this._enableDomainsForTracking();
+      await this._setupDialogOverrides(); // Auto-handle dialogs
       debugLog('Debugger attached successfully');
     } catch (error: any) {
       // Detect extension blocking errors
@@ -1427,6 +1528,7 @@ export class RelayConnection {
     try {
       await chrome.debugger.attach(this._debuggee, '1.3');
       await this._enableDomainsForTracking();
+      await this._setupDialogOverrides(); // Auto-handle dialogs
       debugLog('Debugger attached successfully');
 
       // Wait for page and extension iframes to fully load before returning
