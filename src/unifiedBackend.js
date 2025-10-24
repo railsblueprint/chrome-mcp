@@ -2635,6 +2635,30 @@ class UnifiedBackend {
       dimensions = sizeOf(buffer);
     }
 
+    // Additional check: ensure dimensions don't exceed Claude's limit (2000px)
+    // This is important for fullPage screenshots or high-DPI displays
+    const MAX_DIMENSION = 2000;
+    if (!args.path && (dimensions.width > MAX_DIMENSION || dimensions.height > MAX_DIMENSION)) {
+      const sharp = require('sharp');
+
+      // Calculate scaling factor to fit within limits
+      const scale = Math.min(MAX_DIMENSION / dimensions.width, MAX_DIMENSION / dimensions.height);
+      const targetWidth = Math.round(dimensions.width * scale);
+      const targetHeight = Math.round(dimensions.height * scale);
+
+      buffer = await sharp(buffer)
+        .resize(targetWidth, targetHeight, {
+          fit: 'fill',
+          kernel: 'lanczos3'
+        })
+        .toFormat(format === 'png' ? 'png' : 'jpeg', {
+          quality: format === 'jpeg' ? quality : undefined
+        })
+        .toBuffer();
+
+      dimensions = sizeOf(buffer);
+    }
+
     const sizeKB = buffer.length / 1024;
 
     // If path is provided, save the screenshot to disk
@@ -2658,10 +2682,8 @@ class UnifiedBackend {
       };
     }
 
-    // Check dimension limits for inline images
-    // Claude API blocks images with width or height > 2000px
-    const MAX_DIMENSION = 2000;
-
+    // Dimension check is no longer needed here - we auto-downscale above
+    // This is kept as a safety check in case downscaling failed
     if (dimensions.width > MAX_DIMENSION || dimensions.height > MAX_DIMENSION) {
       const viewportInfo = viewport.width && viewport.height && viewport.devicePixelRatio
         ? `\n**Viewport:** ${viewport.width}x${viewport.height}\n**Device Pixel Ratio:** ${viewport.devicePixelRatio}x`
@@ -2670,7 +2692,7 @@ class UnifiedBackend {
       return {
         content: [{
           type: 'text',
-          text: `### Screenshot Dimensions Too Large for Inline Display\n\n**Screenshot Dimensions:** ${dimensions.width}x${dimensions.height} px${viewportInfo}\n**Limit:** ${MAX_DIMENSION}px (width or height)\n**Size:** ${sizeKB.toFixed(2)} KB\n\n**Images with dimensions exceeding ${MAX_DIMENSION}px cause API communication errors.**\n\n**Solution:** Save to a file instead:\n\`\`\`\nbrowser_take_screenshot path='/path/to/screenshot.${format}' ${args.fullPage ? 'fullPage=true ' : ''}${format === 'jpeg' ? `quality=${quality}` : ''}\n\`\`\`\n\n**Tips to reduce dimensions:**\n- Use viewport only (remove \`fullPage=true\`) - typically 1280x720 or similar\n- Resize browser window to smaller size before screenshot\n- Use \`browser_window action='resize' width=1280 height=720\``
+          text: `### Screenshot Dimensions Too Large (Downscaling Failed)\n\n**Screenshot Dimensions:** ${dimensions.width}x${dimensions.height} px${viewportInfo}\n**Limit:** ${MAX_DIMENSION}px (width or height)\n**Size:** ${sizeKB.toFixed(2)} KB\n\n**The automatic downscaling failed. Please save to a file instead:**\n\`\`\`\nbrowser_take_screenshot path='/path/to/screenshot.${format}' ${args.fullPage ? 'fullPage=true ' : ''}${format === 'jpeg' ? `quality=${quality}` : ''}\n\`\`\`\n\n**Tips to reduce dimensions:**\n- Use viewport only (remove \`fullPage=true\`) - typically 1280x720 or similar\n- Resize browser window to smaller size before screenshot\n- Use \`browser_window action='resize' width=1280 height=720\``
         }],
         isError: true
       };
