@@ -9,6 +9,7 @@
     "activeTab",
     "webNavigation",
     "storage",
+    "management",
     "<all_urls>"
   ],
 

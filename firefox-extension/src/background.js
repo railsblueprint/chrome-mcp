@@ -97,6 +97,12 @@ async function handleCommand(message) {
     case 'forwardCDPCommand':
       return await handleCDPCommand(params);
 
+    case 'listExtensions':
+      return await handleListExtensions();
+
+    case 'reloadExtensions':
+      return await handleReloadExtensions(params);
+
     default:
       throw new Error(`Unknown command: ${method}`);
   }
@@ -308,6 +314,57 @@ async function handleCDPCommand(params) {
 
     default:
       throw new Error(`CDP command not supported in Firefox: ${method}`);
+  }
+}
+
+// Handle listExtensions command
+async function handleListExtensions() {
+  const extensions = await browser.management.getAll();
+
+  // Filter to only show extensions (not themes or other types)
+  const extensionList = extensions
+    .filter(ext => ext.type === 'extension')
+    .map(ext => ({
+      id: ext.id,
+      name: ext.name,
+      version: ext.version,
+      enabled: ext.enabled,
+      description: ext.description
+    }));
+
+  return { extensions: extensionList };
+}
+
+// Handle reloadExtensions command
+async function handleReloadExtensions(params) {
+  const extensionName = params.extensionName;
+
+  if (!extensionName) {
+    // Reload all extensions (just reload this one for now)
+    await browser.runtime.reload();
+    return { reloaded: [browser.runtime.getManifest().name] };
+  }
+
+  // Get all extensions
+  const extensions = await browser.management.getAll();
+
+  // Find the extension by name
+  const targetExtension = extensions.find(ext =>
+    ext.name.toLowerCase() === extensionName.toLowerCase() && ext.type === 'extension'
+  );
+
+  if (!targetExtension) {
+    throw new Error(`Extension "${extensionName}" not found`);
+  }
+
+  // Check if it's this extension
+  if (targetExtension.id === browser.runtime.id) {
+    // Reload this extension
+    await browser.runtime.reload();
+    return { reloaded: [targetExtension.name] };
+  } else {
+    // Cannot reload other extensions in Firefox (security restriction)
+    throw new Error(`Cannot reload other extensions in Firefox. Only "${browser.runtime.getManifest().name}" can be reloaded.`);
   }
 }
 
