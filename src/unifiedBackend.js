@@ -1561,6 +1561,46 @@ class UnifiedBackend {
           case 'mouse_click': {
             const button = action.button || 'left';
 
+            // First, check what element is at these coordinates
+            const elementAtPoint = await this._transport.sendCommand('forwardCDPCommand', {
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `
+                  (() => {
+                    const el = document.elementFromPoint(${action.x}, ${action.y});
+                    if (!el) return null;
+
+                    // Generate a meaningful selector
+                    let selector = el.tagName.toLowerCase();
+                    if (el.id) {
+                      selector += '#' + el.id;
+                    } else if (el.className && typeof el.className === 'string') {
+                      const classes = el.className.trim().split(/\\s+/).filter(c => c);
+                      if (classes.length > 0) {
+                        selector += '.' + classes.slice(0, 2).join('.');
+                      }
+                    }
+
+                    // Get text content (first 50 chars)
+                    let text = '';
+                    for (const node of el.childNodes) {
+                      if (node.nodeType === Node.TEXT_NODE) {
+                        text += node.textContent;
+                      }
+                    }
+                    text = text.trim();
+
+                    return {
+                      selector: selector,
+                      tag: el.tagName.toLowerCase(),
+                      text: text.length > 50 ? text.substring(0, 50) + '...' : text
+                    };
+                  })()
+                `,
+                returnByValue: true
+              }
+            });
+
             await this._transport.sendCommand('forwardCDPCommand', {
               method: 'Input.dispatchMouseEvent',
               params: {
@@ -1584,6 +1624,16 @@ class UnifiedBackend {
             });
 
             result = `Clicked at (${action.x}, ${action.y})`;
+
+            // Add element info if found
+            const elementInfo = elementAtPoint.result?.value;
+            if (elementInfo) {
+              result += ` - found ${elementInfo.selector}`;
+              if (elementInfo.text) {
+                result += ` "${elementInfo.text}"`;
+              }
+            }
+
             break;
           }
 
