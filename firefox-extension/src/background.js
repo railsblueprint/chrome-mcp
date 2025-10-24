@@ -103,6 +103,9 @@ async function handleCommand(message) {
     case 'reloadExtensions':
       return await handleReloadExtensions(params);
 
+    case 'openTestPage':
+      return await handleOpenTestPage();
+
     default:
       throw new Error(`Unknown command: ${method}`);
   }
@@ -207,6 +210,16 @@ async function handleCDPCommand(params) {
   }
 
   switch (method) {
+    case 'Page.navigate':
+      // Navigate to URL using Firefox tabs.update
+      await browser.tabs.update(attachedTabId, { url: cdpParams.url });
+      return {};
+
+    case 'Page.reload':
+      // Reload page using Firefox tabs.reload
+      await browser.tabs.reload(attachedTabId);
+      return {};
+
     case 'Page.captureScreenshot':
       // Use Firefox tabs.captureTab API
       const dataUrl = await browser.tabs.captureTab(attachedTabId, {
@@ -333,6 +346,22 @@ async function handleListExtensions() {
     }));
 
   return { extensions: extensionList };
+}
+
+// Handle openTestPage command
+async function handleOpenTestPage() {
+  const testPageUrl = browser.runtime.getURL('test.html');
+  const tab = await browser.tabs.create({ url: testPageUrl, active: true });
+
+  // Auto-attach to the test page tab
+  attachedTabId = tab.id;
+  attachedTabInfo = {
+    id: tab.id,
+    title: 'Browser Interaction Test Page',
+    url: testPageUrl
+  };
+
+  return { url: testPageUrl, tab: { id: tab.id } };
 }
 
 // Handle reloadExtensions command
