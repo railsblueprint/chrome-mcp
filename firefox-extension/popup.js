@@ -164,15 +164,25 @@ async function handleLogout() {
 
 // Render function
 function render() {
-  const root = document.getElementById('root');
+  try {
+    const root = document.getElementById('root');
 
-  if (state.showSettings) {
-    root.innerHTML = renderSettings();
-  } else {
-    root.innerHTML = renderMain();
+    if (!root) {
+      console.error('[Popup] Root element not found!');
+      return;
+    }
+
+    if (state.showSettings) {
+      root.innerHTML = renderSettings();
+    } else {
+      root.innerHTML = renderMain();
+    }
+
+    attachEventListeners();
+  } catch (error) {
+    console.error('[Popup] Render error:', error);
+    throw error;
   }
-
-  attachEventListeners();
 }
 
 // Render settings view
@@ -427,42 +437,62 @@ function attachEventListeners() {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-  await loadState();
-  await updateStatus();
+  try {
+    console.log('[Popup] Initializing...');
+    await loadState();
+    console.log('[Popup] State loaded:', state);
+    await updateStatus();
+    console.log('[Popup] Status updated');
 
-  // Listen for status change broadcasts from background script
-  browser.runtime.onMessage.addListener((message) => {
-    if (message.type === 'statusChanged') {
-      updateStatus();
-    }
-  });
-
-  // Listen for tab changes
-  browser.tabs.onActivated.addListener(updateStatus);
-
-  // Listen for storage changes
-  browser.storage.onChanged.addListener(async (changes, areaName) => {
-    if (areaName === 'local') {
-      if (changes.isPro) {
-        state.isPro = changes.isPro.newValue === true;
-        render();
+    // Listen for status change broadcasts from background script
+    browser.runtime.onMessage.addListener((message) => {
+      if (message.type === 'statusChanged') {
+        updateStatus();
       }
-      if (changes.accessToken) {
-        const userInfo = await getUserInfoFromStorage();
-        state.userEmail = userInfo?.email || null;
-        render();
-      }
-      if (changes.connectionStatus) {
-        state.connectionStatus = changes.connectionStatus.newValue || null;
-        render();
-      }
-    }
-  });
+    });
 
-  // Listen for visibility changes
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
-      loadState();
-    }
-  });
+    // Listen for tab changes
+    browser.tabs.onActivated.addListener(updateStatus);
+
+    // Listen for storage changes
+    browser.storage.onChanged.addListener(async (changes, areaName) => {
+      if (areaName === 'local') {
+        if (changes.isPro) {
+          state.isPro = changes.isPro.newValue === true;
+          render();
+        }
+        if (changes.accessToken) {
+          const userInfo = await getUserInfoFromStorage();
+          state.userEmail = userInfo?.email || null;
+          render();
+        }
+        if (changes.connectionStatus) {
+          state.connectionStatus = changes.connectionStatus.newValue || null;
+          render();
+        }
+      }
+    });
+
+    // Listen for visibility changes
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        loadState();
+      }
+    });
+
+    console.log('[Popup] Initialization complete');
+  } catch (error) {
+    console.error('[Popup] Initialization error:', error);
+    document.getElementById('root').innerHTML = `
+      <div class="popup-container">
+        <div class="popup-header">
+          <h1>Error</h1>
+        </div>
+        <div class="popup-content">
+          <p style="color: red">Failed to initialize popup: ${error.message}</p>
+          <p style="font-size: 12px">${error.stack}</p>
+        </div>
+      </div>
+    `;
+  }
 });
