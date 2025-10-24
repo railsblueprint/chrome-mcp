@@ -426,6 +426,21 @@ async function handleCDPCommand(params) {
       // Simulate keyboard events using JavaScript
       return await handleKeyEvent(cdpParams);
 
+    case 'DOM.describeNode':
+      // Firefox doesn't need this for file uploads, but return mock data for compatibility
+      return {
+        node: {
+          backendNodeId: 1,
+          nodeType: 1,
+          nodeName: 'INPUT'
+        }
+      };
+
+    case 'DOM.setFileInputFiles':
+      // Firefox doesn't support programmatic file input for security reasons
+      // This would require user interaction in a real scenario
+      throw new Error('File upload not supported in Firefox extension - requires user interaction');
+
     case 'Accessibility.getFullAXTree':
       // Firefox doesn't have accessibility tree API, so create a simplified DOM snapshot
       const snapshotResults = await browser.tabs.executeScript(attachedTabId, {
