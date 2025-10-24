@@ -33,8 +33,9 @@ async function autoConnect() {
     };
 
     socket.onmessage = async (event) => {
+      let message;
       try {
-        const message = JSON.parse(event.data);
+        message = JSON.parse(event.data);
         console.log('[Firefox MCP] Received command:', message);
 
         // Handle notifications (no id, has method)
@@ -54,10 +55,16 @@ async function autoConnect() {
         }));
       } catch (error) {
         console.error('[Firefox MCP] Command error:', error);
-        socket.send(JSON.stringify({
-          id: message.id,
-          error: error.message
-        }));
+        // Send error response if we have a message id
+        if (message && message.id) {
+          socket.send(JSON.stringify({
+            id: message.id,
+            error: {
+              message: error.message,
+              stack: error.stack
+            }
+          }));
+        }
       }
     };
 
@@ -199,6 +206,162 @@ async function handleSelectTab(params) {
   return { tab: { id: selectedTab.id, title: selectedTab.title, url: selectedTab.url } };
 }
 
+// Handle mouse events via JavaScript injection
+async function handleMouseEvent(params) {
+  const { type, x, y, button = 'left', clickCount = 1 } = params;
+
+  // Map button names to mouse button numbers
+  const buttonMap = { left: 0, middle: 1, right: 2 };
+  const buttonNum = buttonMap[button] || 0;
+
+  // Create the script to execute based on event type
+  let script = '';
+
+  if (type === 'mouseMoved') {
+    script = `
+      (() => {
+        const element = document.elementFromPoint(${x}, ${y});
+        if (element) {
+          const event = new MouseEvent('mousemove', {
+            view: window,
+            bubbles: true,
+            cancelable: true,
+            clientX: ${x},
+            clientY: ${y}
+          });
+          element.dispatchEvent(event);
+        }
+      })();
+    `;
+  } else if (type === 'mousePressed') {
+    script = `
+      (() => {
+        const element = document.elementFromPoint(${x}, ${y});
+        if (element) {
+          const event = new MouseEvent('mousedown', {
+            view: window,
+            bubbles: true,
+            cancelable: true,
+            clientX: ${x},
+            clientY: ${y},
+            button: ${buttonNum},
+            detail: ${clickCount}
+          });
+          element.dispatchEvent(event);
+        }
+      })();
+    `;
+  } else if (type === 'mouseReleased') {
+    script = `
+      (() => {
+        const element = document.elementFromPoint(${x}, ${y});
+        if (element) {
+          // First dispatch mouseup
+          const mouseupEvent = new MouseEvent('mouseup', {
+            view: window,
+            bubbles: true,
+            cancelable: true,
+            clientX: ${x},
+            clientY: ${y},
+            button: ${buttonNum},
+            detail: ${clickCount}
+          });
+          element.dispatchEvent(mouseupEvent);
+
+          // Then dispatch click
+          const clickEvent = new MouseEvent('click', {
+            view: window,
+            bubbles: true,
+            cancelable: true,
+            clientX: ${x},
+            clientY: ${y},
+            button: ${buttonNum},
+            detail: ${clickCount}
+          });
+          element.dispatchEvent(clickEvent);
+        }
+      })();
+    `;
+  }
+
+  await browser.tabs.executeScript(attachedTabId, { code: script });
+  return {};
+}
+
+// Handle keyboard events via JavaScript injection
+async function handleKeyEvent(params) {
+  const { type, key, code, text, windowsVirtualKeyCode, nativeVirtualKeyCode, unmodifiedText } = params;
+
+  if (type === 'char') {
+    // For character input, directly modify the focused element's value
+    // Note: Firefox's executeScript doesn't auto-invoke IIFEs, so we use a simpler approach
+    const script = `
+      {
+        const element = document.activeElement;
+        if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA')) {
+          try {
+            const char = ${JSON.stringify(text)};
+            const value = element.value || '';
+
+            // Try to use selection if supported
+            let start, end, supportsSelection = false;
+            try {
+              start = element.selectionStart;
+              end = element.selectionEnd;
+              if (typeof start === 'number' && typeof end === 'number') {
+                supportsSelection = true;
+              }
+            } catch (e) {
+              // Selection not supported (e.g., email/number inputs in Firefox)
+            }
+
+            if (supportsSelection) {
+              // Insert at cursor position
+              element.value = value.substring(0, start) + char + value.substring(end);
+              element.selectionStart = element.selectionEnd = start + char.length;
+            } else {
+              // Just append to end if selection not supported
+              element.value = value + char;
+            }
+
+            // Dispatch input event to trigger React/Vue listeners
+            const inputEvent = new Event('input', { bubbles: true, cancelable: true });
+            element.dispatchEvent(inputEvent);
+          } catch (error) {
+            console.error('Key event error:', error);
+          }
+        }
+      }
+    `;
+
+    await browser.tabs.executeScript(attachedTabId, { code: script });
+  } else {
+    // For keyDown/keyUp, dispatch keyboard events
+    const eventType = type === 'keyDown' ? 'keydown' : 'keyup';
+
+    const script = `
+      {
+        const element = document.activeElement || document.body;
+
+        const event = new KeyboardEvent(${JSON.stringify(eventType)}, {
+          key: ${JSON.stringify(key)},
+          code: ${JSON.stringify(code)},
+          bubbles: true,
+          cancelable: true,
+          keyCode: ${windowsVirtualKeyCode || 0},
+          which: ${windowsVirtualKeyCode || 0}
+        });
+
+        element.dispatchEvent(event);
+      }
+    `;
+
+    await browser.tabs.executeScript(attachedTabId, { code: script });
+  }
+
+  return {};
+}
+
 // Handle CDP commands (translate to Firefox equivalents)
 async function handleCDPCommand(params) {
   const { method, params: cdpParams } = params;
@@ -254,6 +417,14 @@ async function handleCDPCommand(params) {
         console.error('[Firefox MCP] Script execution failed:', error);
         throw error;
       }
+
+    case 'Input.dispatchMouseEvent':
+      // Simulate mouse events using JavaScript
+      return await handleMouseEvent(cdpParams);
+
+    case 'Input.dispatchKeyEvent':
+      // Simulate keyboard events using JavaScript
+      return await handleKeyEvent(cdpParams);
 
     case 'Accessibility.getFullAXTree':
       // Firefox doesn't have accessibility tree API, so create a simplified DOM snapshot
