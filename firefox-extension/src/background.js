@@ -114,6 +114,9 @@ async function handleCommand(message) {
     case 'openTestPage':
       return await handleOpenTestPage();
 
+    case 'closeTab':
+      return await handleCloseTab();
+
     default:
       throw new Error(`Unknown command: ${method}`);
   }
@@ -442,6 +445,20 @@ async function handleCDPCommand(params) {
       // This would require user interaction in a real scenario
       throw new Error('File upload not supported in Firefox extension - requires user interaction');
 
+    case 'Emulation.setDeviceMetricsOverride':
+      // Firefox uses actual window resizing instead of device metrics emulation
+      // Get the current window
+      const tab = await browser.tabs.get(attachedTabId);
+      const window = await browser.windows.get(tab.windowId);
+
+      // Resize the window
+      await browser.windows.update(window.id, {
+        width: cdpParams.width,
+        height: cdpParams.height
+      });
+
+      return {};
+
     case 'Page.handleJavaScriptDialog':
       // Store the dialog response for when the next dialog appears
       pendingDialogResponse = {
@@ -645,6 +662,19 @@ async function handleReloadExtensions(params) {
     // Cannot reload other extensions in Firefox (security restriction)
     throw new Error(`Cannot reload other extensions in Firefox. Only "${browser.runtime.getManifest().name}" can be reloaded.`);
   }
+}
+
+// Handle closeTab command
+async function handleCloseTab() {
+  if (!attachedTabId) {
+    throw new Error('No tab attached');
+  }
+
+  await browser.tabs.remove(attachedTabId);
+  attachedTabId = null;
+  attachedTabInfo = null;
+
+  return { success: true };
 }
 
 // Handle messages from popup
