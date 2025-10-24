@@ -8,6 +8,7 @@ let isConnected = false;
 let attachedTabId = null; // Currently attached tab ID
 let attachedTabInfo = null; // Currently attached tab info {id, title, url}
 let projectName = null; // MCP project name from client_id
+let pendingDialogResponse = null; // Stores response for next dialog (accept, text)
 
 // Auto-connect to MCP server on startup
 async function autoConnect() {
@@ -440,6 +441,69 @@ async function handleCDPCommand(params) {
       // Firefox doesn't support programmatic file input for security reasons
       // This would require user interaction in a real scenario
       throw new Error('File upload not supported in Firefox extension - requires user interaction');
+
+    case 'Page.handleJavaScriptDialog':
+      // Store the dialog response for when the next dialog appears
+      pendingDialogResponse = {
+        accept: cdpParams.accept !== false,
+        promptText: cdpParams.promptText || ''
+      };
+
+      // Inject a script that will handle dialogs automatically
+      // This sets up persistent overrides that will auto-respond to dialogs
+      await browser.tabs.executeScript(attachedTabId, {
+        code: `
+          // Set up dialog response in window object
+          window.__blueprintDialogResponse = ${JSON.stringify(pendingDialogResponse)};
+
+          // Store originals only once
+          if (!window.__originalAlert) {
+            window.__originalAlert = window.alert;
+            window.__originalConfirm = window.confirm;
+            window.__originalPrompt = window.prompt;
+
+            // Override with auto-response that checks for pending response
+            window.alert = function(...args) {
+              if (window.__blueprintDialogResponse) {
+                console.log('[Blueprint MCP] Auto-handled alert');
+                delete window.__blueprintDialogResponse;
+                return undefined;
+              }
+              return window.__originalAlert.apply(this, args);
+            };
+
+            window.confirm = function(...args) {
+              if (window.__blueprintDialogResponse) {
+                const response = window.__blueprintDialogResponse.accept;
+                console.log('[Blueprint MCP] Auto-handled confirm, returning:', response);
+                delete window.__blueprintDialogResponse;
+                return response;
+              }
+              return window.__originalConfirm.apply(this, args);
+            };
+
+            window.prompt = function(...args) {
+              if (window.__blueprintDialogResponse) {
+                const response = window.__blueprintDialogResponse.accept
+                  ? window.__blueprintDialogResponse.promptText
+                  : null;
+                console.log('[Blueprint MCP] Auto-handled prompt, returning:', response);
+                delete window.__blueprintDialogResponse;
+                return response;
+              }
+              return window.__originalPrompt.apply(this, args);
+            };
+
+            'dialog_handler_installed';
+          } else {
+            // Just update the response if already set up
+            console.log('[Blueprint MCP] Dialog handler already installed, updated response');
+            'dialog_response_updated';
+          }
+        `
+      });
+
+      return {};
 
     case 'Accessibility.getFullAXTree':
       // Firefox doesn't have accessibility tree API, so create a simplified DOM snapshot
